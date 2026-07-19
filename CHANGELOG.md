@@ -2,6 +2,16 @@
 
 All notable changes to Google Flow MCP are documented here.
 
+## [0.2.3] - 2026-07-19
+
+### Fixed
+
+- Every generation now persists Flow Agent's language-independent `AUTO_APPROVE` setting inside the isolated managed Chromium profile
+- The MCP saves the preference, reopens Agent settings, and verifies that **Never ask before generating** actually persisted before submission
+- If Flow still exposes an approval card, the MCP selects the final persistent **Approve and don't ask again** action instead of the one-time approval
+- Individual asset `/edit/...` URLs are canonicalized back to their project workspace before generation so Agent settings are always reachable
+- Agents are explicitly prohibited from handling Flow approval UI or asking users to interact with the hidden managed browser
+
 ## [0.2.2] - 2026-07-19
 
 ### Fixed
@@ -105,3 +115,4 @@ All notable changes to Google Flow MCP are documented here.
 [0.2.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.0
 [0.2.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.1
 [0.2.2]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.2
+[0.2.3]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.3

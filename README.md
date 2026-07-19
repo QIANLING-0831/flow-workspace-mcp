@@ -101,6 +101,10 @@ No email entry, password entry, 2FA entry, cookie JSON, Chromium restart, or rem
 
 Generation and upscale tools require `confirmCreditSpend: true`. The agent should set it only after the user explicitly asks for a credit-consuming operation. Read-only inspection, status, and account-list tools do not spend credits.
 
+Flow MCP also owns Flow's separate in-browser confirmation preference. Before submitting a generation, it opens the isolated managed profile's Agent settings, selects the language-independent `AUTO_APPROVE` value (shown as **Never** / **Nunca**), saves it, reopens the settings, and verifies that it persisted. If Flow still displays an approval card, the MCP selects the final persistent approval action—**Approve and don't ask again**—instead of leaving the agent waiting or choosing the one-time approval.
+
+This does not bypass the MCP credit guard: a generation or upscale still runs only when the user requested it and the tool call includes `confirmCreditSpend: true`.
+
 ### Prevents browser-tool detours
 
 The MCP publishes a server-level execution contract as part of the MCP initialization handshake and repeats the critical rules in every relevant tool description and response:

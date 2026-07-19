@@ -99,6 +99,7 @@ export interface FlowJob {
   mediaProbe?: MediaProbe[];
   error?: string;
   diagnosticScreenshot?: string;
+  creditConfirmationMode?: "auto_approve";
   baselineMediaCount?: number;
   baselineMediaKeys?: string[];
   generatedAssets?: MediaAssetIdentity[];

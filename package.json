@@ -1,6 +1,6 @@
 {
   "name": "google-flow-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "MCP server for Google Flow video and image generation with live capability discovery, multi-account Chromium login, upscaling, and validated local downloads—no generation API key.",
   "type": "module",
   "main": "dist/index.js",

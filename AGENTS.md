@@ -44,6 +44,7 @@ After it succeeds:
 - Never add `--remote-allow-origins=*`, remote-debugging settings, or speculative browser flags.
 - Never replace the user's entire `mcp_config.json`; preserve unrelated MCP servers.
 - Never use generic browser/computer-use tools to operate the Flow website.
+- Never click or ask the user to click Flow's generation-approval choices. The MCP persists and verifies Flow Agent's `AUTO_APPROVE` setting and handles the persistent approval fallback internally.
 - Never invoke account completion before the user confirms that the extension popup says the session was sent.
 
 If a hard requirement fails, report the exact failing prerequisite. Do not patch the published source as an installation workaround.

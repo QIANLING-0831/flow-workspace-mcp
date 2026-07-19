@@ -22,7 +22,7 @@ const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.ur
 
 const server = new McpServer({
   name: "flow-mcp",
-  version: "0.2.2",
+  version: "0.2.3",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 }, {
   instructions: FLOW_AGENT_INSTRUCTIONS,
@@ -88,6 +88,7 @@ server.registerTool(
           "Select live aspect ratios, output counts, and durations when Flow exposes them",
           "Attach local image/video references, ingredients, or frames",
           "Use Flow's available video upscale options such as 1080p or highest_available",
+          "Persist Flow's Never-ask generation setting inside each isolated managed Chromium profile",
           "Track each job's exact generated assets so gallery reordering cannot substitute an older file",
           "Download media plus reproducibility manifests, hashes, and optional FFprobe metadata",
           "Keep multiple Google Flow accounts in isolated local sessions",

@@ -1,6 +1,7 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { APIResponse, Download, Locator, Page } from "playwright";
+import { preferredPersistentApprovalIndex } from "./approval.js";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
 import { CookieBridge } from "./cookie-bridge.js";
@@ -13,6 +14,7 @@ import {
   selectNewMedia,
   type MediaSnapshot,
 } from "./media-selection.js";
+import { canonicalFlowProjectUrl } from "./navigation.js";
 import { safeFileStem } from "./paths.js";
 import { FlowStore } from "./store.js";
 import {
@@ -193,6 +195,8 @@ export class FlowAdapter {
       }
       const currentUrl = page.url();
       if (access.workspaceAvailable) {
+        await this.openProject(page);
+        await this.ensureAgentAutoApprove(page);
         await this.store.markAccountConnected(account.id);
       }
       if (access.workspaceAvailable && !attached) {
@@ -329,6 +333,8 @@ export class FlowAdapter {
         page = await this.readyPage(account.id, true);
         await this.store.updateJob(job, "configuring", { flowProjectUrl: page.url() });
         await this.openProject(page, request.flowProject);
+        await this.ensureAgentAutoApprove(page);
+        await this.store.updateJob(job, "configuring", { creditConfirmationMode: "auto_approve" });
         await this.configureGeneration(page, request);
         await this.attachReferences(page, request.referenceFiles);
         await this.fillPrompt(
@@ -528,6 +534,11 @@ export class FlowAdapter {
   }
 
   private async openProject(page: Page, projectName?: string): Promise<void> {
+    const projectWorkspaceUrl = canonicalFlowProjectUrl(page.url());
+    if (projectWorkspaceUrl !== page.url()) {
+      await page.goto(projectWorkspaceUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1_000);
+    }
     if (await firstVisible([this.promptLocator(page)])) return;
 
     await Promise.race([
@@ -874,6 +885,53 @@ export class FlowAdapter {
     }
   }
 
+  private async ensureAgentAutoApprove(page: Page): Promise<void> {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    const openSettings = async (): Promise<Locator> => {
+      const alreadyOpen = await firstVisible([page.locator('[role="radio"][value="AUTO_APPROVE"]')]);
+      if (alreadyOpen) return alreadyOpen;
+      const settings = await firstVisible([
+        page.locator("button").filter({ has: page.locator("i", { hasText: /^tune$/ }) }).last(),
+      ]);
+      if (!settings) {
+        throw new FlowError("ui_changed", "Flow Agent settings could not be opened to disable repeated credit confirmations.");
+      }
+      await settings.click();
+      await page.waitForTimeout(300);
+      const radio = await firstVisible([page.locator('[role="radio"][value="AUTO_APPROVE"]')]);
+      if (!radio) {
+        throw new FlowError("ui_changed", "Flow Agent settings did not expose the language-independent AUTO_APPROVE option.");
+      }
+      return radio;
+    };
+    const closeSettings = async (): Promise<void> => {
+      const close = await firstVisible([
+        page.locator("button").filter({ has: page.locator("i", { hasText: /^close$/ }) }).last(),
+      ]);
+      if (close) await close.click();
+      else await page.keyboard.press("Escape").catch(() => undefined);
+      await page.waitForTimeout(200);
+    };
+
+    let autoApprove = await openSettings();
+    if (await autoApprove.getAttribute("aria-checked") !== "true") {
+      await autoApprove.click();
+      const save = await lastVisible(page.locator("button:not([role])").filter({ hasNot: page.locator("i") }));
+      if (!save) {
+        throw new FlowError("ui_changed", "Flow Agent settings did not expose its Save control.");
+      }
+      await save.click();
+      await page.waitForTimeout(500);
+      if (await autoApprove.isVisible().catch(() => false)) await closeSettings();
+
+      autoApprove = await openSettings();
+      if (await autoApprove.getAttribute("aria-checked") !== "true") {
+        throw new FlowError("generation_failed", "Flow did not persist its AUTO_APPROVE credit-confirmation setting after Save.");
+      }
+    }
+    await closeSettings();
+  }
+
   private async clickGenerate(page: Page, mediaType: MediaType, mediaBaseline: number): Promise<void> {
     const agentUi = Boolean(await firstVisible([
       page.locator("button").filter({ has: page.locator("i", { hasText: /^tune$/ }) }),
@@ -896,8 +954,11 @@ export class FlowAdapter {
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline) {
         const checks = await visibleCount(checkIcons);
-        if (checks > approvalBaseline) {
-          const approve = checkIcons.nth(approvalBaseline).locator("..");
+        const preferredApproval = preferredPersistentApprovalIndex(approvalBaseline, checks);
+        if (preferredApproval !== null) {
+          const persistentCheck = await lastVisible(checkIcons);
+          if (!persistentCheck) continue;
+          const approve = persistentCheck.locator("xpath=ancestor::button[1]");
           await approve.click();
           await page.waitForTimeout(500);
           return;
