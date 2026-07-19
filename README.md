@@ -4,7 +4,6 @@
 
 **Generate and download Google Flow videos and images directly from AI agents—using your existing Google subscription, with no generation API key.**
 
-[![CI](https://github.com/retrolyze52/google-flow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/retrolyze52/google-flow-mcp/actions/workflows/ci.yml)
 [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-compatible-7c3aed)](https://modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -350,7 +349,7 @@ npm run check
 npm pack --dry-run
 ```
 
-CI runs the full check suite on Windows and Linux with Node.js 20 and 24. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The included CI workflow targets Windows and Linux with Node.js 20 and 24. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License and disclaimer
 

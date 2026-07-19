@@ -9,7 +9,7 @@ npm ci
 npm run check
 ```
 
-Node.js 20 or newer is required. CI runs on Windows and Linux with Node.js 20 and 24.
+Node.js 20 or newer is required. The included CI matrix targets Windows and Linux with Node.js 20 and 24.
 
 ## Pull requests
 
