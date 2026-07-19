@@ -1,7 +1,7 @@
 export const FLOW_URL = "https://labs.google/fx/tools/flow";
 
 export type MediaType = "video" | "image";
-export type UpscaleFactor = "none" | "1x" | "2x" | "4x" | "highest_available";
+export type UpscaleFactor = string;
 export type JobStatus =
   | "created"
   | "configuring"
@@ -113,10 +113,26 @@ export interface GenerationRequest {
 export interface UiCapabilities {
   url: string;
   signedIn: boolean;
+  language?: string;
+  models?: {
+    image: Array<{ id: string; label: string; selected: boolean }>;
+    video: Array<{ id: string; label: string; selected: boolean }>;
+  };
+  aspectRatiosByMedia?: { image: string[]; video: string[] };
+  outputCountsByMedia?: { image: number[]; video: number[] };
   visibleModels: string[];
   visibleAspectRatios: string[];
   visibleDurations: number[];
   availableUpscales: string[];
+  unavailableUpscales?: string[];
+  upscaleOptions?: UpscaleOption[];
   pageTextExcerpt: string;
   screenshot?: string;
+}
+
+export interface UpscaleOption {
+  id: string;
+  label: string;
+  available: boolean;
+  kind: "preview" | "original" | "upscale" | "unknown";
 }

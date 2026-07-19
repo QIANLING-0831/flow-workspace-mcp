@@ -13,9 +13,10 @@ It uses no Google generation API key. Subscription credits are consumed through 
 - No email, password, 2FA, cookie JSON, browser restart, or terminal confirmation during account connection.
 - Optional localhost CDP attachment to reuse an explicitly debug-enabled Chromium session.
 - Per-account operation queue; different accounts can run independently.
-- Video and image generation with model, aspect ratio, duration, output count, and reference files.
-- Literal Flow asset-menu upscale support: `1x`, `2x`, `4x`, or `highest_available`.
-- Never assumes that `4x` exists and never silently downgrades a requested factor.
+- Live, language-independent capability discovery with normalized model IDs, exact labels, selected state, ratios, output counts, durations, and asset actions.
+- Video and image generation in any prompt language with model, aspect ratio, duration (when exposed), output count, and reference files.
+- Dynamic Flow asset-menu upscale support, including factor labels such as `2x` and resolution labels such as `1080p` or `4k`.
+- Reports both available and unavailable/upgrade-only upscale choices and never silently downgrades a request.
 - Persistent jobs for long-running generations.
 - Browser download capture into any absolute project directory.
 - `.flow.json` sidecar manifest containing prompt, settings, account ID, upscale choice, and job history.
@@ -130,7 +131,7 @@ Restart the MCP client after changing its configuration.
 
 1. Call `flow_list_accounts` and select an account.
 2. If necessary, tell the user to click the bridge extension, then call `flow_connect_account`; it detects the transfer and existing-account selection automatically.
-3. Optionally call `flow_inspect_account` to inspect current Flow UI capabilities.
+3. Call `flow_inspect_account` immediately before generation to get the live capability map. Use its normalized IDs instead of guessing what the account offers.
 4. Call `flow_generate_video` or `flow_generate_image` with `confirmCreditSpend: true` only after the user explicitly requested generation.
 5. If a long generation returns `processing`, poll `flow_job_status`.
 6. A timed-out job becomes `ready` when its asset is detected. Call `flow_upscale_video` if still needed, then `flow_download_job`.
@@ -141,12 +142,11 @@ Example video request:
 {
   "accountId": "personal",
   "prompt": "A cinematic tracking shot through a rainy miniature neon city, shallow depth of field, reflections on wet streets, no text",
-  "model": "Veo 3.1 - Fast",
+  "model": "omni-flash",
   "aspectRatio": "16:9",
-  "durationSeconds": 8,
   "outputs": 1,
   "referenceFiles": [],
-  "upscale": "2x",
+  "upscale": "1080p",
   "outputDirectory": "C:\\projects\\my-remotion-video\\public\\generated\\flow",
   "download": true,
   "timeoutSeconds": 600,
@@ -158,13 +158,14 @@ For Remotion, saving under `public/generated/flow` lets compositions use a retur
 
 ## Upscaling behavior
 
-Upscaling is treated as a Flow asset action, not a guessed resolution conversion:
+Upscaling is treated as a live Flow asset/download action, not a guessed resolution conversion:
 
 1. The server opens the generated video's context menu using the same right-click interaction available to the user.
-2. It reads the available upscale labels.
-3. An exact request such as `2x` fails if `2x` is not offered.
-4. `highest_available` ranks only the options present in that menu.
-5. If upscaling creates another processing job, the state remains persistent and pollable.
+2. It reads each numeric factor or resolution structurally, independently of translated surrounding text.
+3. The capability response distinguishes preview, original, upscale, and unavailable/upgrade-only options. For example, an account can report original `720p`, available upscale `1080p`, and unavailable `4k`.
+4. An exact request such as `2x` or `1080p` fails if that exact ID is not offered and available.
+5. `highest_available` ranks only available choices present in that menu.
+6. Flow may return a direct upscaled download or create another processing asset; both paths remain captured by the persistent job.
 
 The server does not use local interpolation or an unrelated upscaler when Flow lacks the requested option.
 
@@ -200,7 +201,7 @@ flow-mcp/
   diagnostics/*.png
 ```
 
-On a `ui_changed` error, open the returned screenshot, confirm Flow's current wording, and update semantic role/text selectors in `src/flow-adapter.ts`. Avoid hashed class names.
+On a `ui_changed` error, open the returned screenshot and update the structural role/material-icon selectors in `src/flow-adapter.ts`. Avoid translated wording and hashed class names.
 
 ## Limitations and responsible use
 

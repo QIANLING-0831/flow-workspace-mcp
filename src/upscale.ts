@@ -1,15 +1,58 @@
 import { FlowError } from "./errors.js";
-import type { UpscaleFactor } from "./types.js";
+import type { UpscaleFactor, UpscaleOption } from "./types.js";
 
-export function extractUpscaleLabels(texts: string[]): string[] {
-  return [
-    ...new Set(
-      texts
-        .flatMap((text) => text.split(/\r?\n/))
-        .map((text) => text.trim())
-        .filter((text) => /(?:upscale.*(?:1x|2x|4x|1080p|4k)|^(?:1x|2x|4x|1080p|4k)$)/i.test(text)),
-    ),
-  ];
+export interface AssetMenuEntry {
+  text: string;
+  disabled?: boolean;
+}
+
+export function normalizeUpscaleId(value: string): string {
+  const factor = value.match(/\b(1x|2x|4x)\b/i)?.[1];
+  if (factor) return factor.toLowerCase();
+  const resolution = value.match(/\b(\d{3,4}p|[48]k)\b/i)?.[1];
+  if (resolution) return resolution.toLowerCase();
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+export function upscaleHeight(id: string): number | undefined {
+  const normalized = normalizeUpscaleId(id);
+  if (normalized === "4k") return 2160;
+  if (normalized === "8k") return 4320;
+  const match = normalized.match(/^(\d{3,4})p$/);
+  return match?.[1] ? Number.parseInt(match[1], 10) : undefined;
+}
+
+export function extractUpscaleOptions(
+  entries: AssetMenuEntry[],
+  originalHeight?: number,
+): UpscaleOption[] {
+  const seen = new Set<string>();
+  const options: UpscaleOption[] = [];
+  for (const entry of entries) {
+    const id = normalizeUpscaleId(entry.text);
+    if (!/^(?:1x|2x|4x|\d{3,4}p|[48]k)$/.test(id) || seen.has(id)) continue;
+    const height = upscaleHeight(id);
+    const factor = id.match(/^(\d)x$/)?.[1];
+    const kind = factor
+      ? Number.parseInt(factor, 10) <= 1 ? "original" as const : "upscale" as const
+      : originalHeight && height
+        ? height < originalHeight ? "preview" as const : height === originalHeight ? "original" as const : "upscale" as const
+        : "unknown" as const;
+    seen.add(id);
+    options.push({
+      id,
+      label: entry.text.trim().replace(/\s+/g, " "),
+      available: !entry.disabled,
+      kind,
+    });
+  }
+  return options;
+}
+
+export function extractUpscaleLabels(texts: string[], originalHeight?: number): string[] {
+  return extractUpscaleOptions(texts.map((text) => ({ text })), originalHeight)
+    .filter((option) => option.kind === "upscale" && option.available)
+    .map((option) => option.id);
 }
 
 export function chooseUpscaleOption(
@@ -19,25 +62,25 @@ export function chooseUpscaleOption(
   if (!options.length) {
     throw new FlowError(
       "unsupported_option",
-      "The selected video did not expose any upscale choices in its Flow asset menu.",
+      "The selected video did not expose any available upscale choices in its Flow asset menu.",
       ["The video may still be processing, or this account/model may not support upscaling."],
     );
   }
   if (requested !== "highest_available") {
-    const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const exact = options.find((option) => new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, "i").test(option));
+    const requestedId = normalizeUpscaleId(requested);
+    const exact = options.find((option) => normalizeUpscaleId(option) === requestedId);
     if (exact) return exact;
     throw new FlowError(
       "unsupported_option",
       `Upscale '${requested}' is not offered for this video. Available choices: ${options.join(", ")}`,
-      ["Use highest_available to select the largest factor actually shown by Flow."],
+      ["Call flow_inspect_account for the live choices, or use highest_available."],
     );
   }
   const score = (value: string): number => {
-    if (/4x|4k/i.test(value)) return 4;
-    if (/2x|1080p/i.test(value)) return 2;
-    if (/1x/i.test(value)) return 1;
-    return 0;
+    const height = upscaleHeight(value);
+    if (height) return height;
+    const factor = normalizeUpscaleId(value).match(/^(\d)x$/)?.[1];
+    return factor ? Number.parseInt(factor, 10) * 1_000 : 0;
   };
   return [...options].sort((left, right) => score(right) - score(left))[0]!;
 }

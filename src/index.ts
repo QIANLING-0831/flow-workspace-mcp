@@ -20,7 +20,7 @@ const flow = new FlowAdapter(store, browsers, cookieBridge);
 const server = new McpServer({
   name: "flow-mcp",
   version: "0.1.0",
-  description: "Automates Google Flow through user-owned, persistent Chrome sessions and saves generated media locally.",
+  description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 });
 
 function ok(value: string | FlowJob | UiCapabilities | unknown): { content: Array<{ type: "text"; text: string }> } {
@@ -39,8 +39,10 @@ const accountId = z
   .max(48)
   .describe("Local account profile ID such as 'personal' or 'studio'. Each managed ID has an isolated persistent Chromium profile.");
 const upscale = z
-  .enum(["none", "1x", "2x", "4x", "highest_available"])
-  .describe("Flow asset-menu upscale choice. 'highest_available' discovers the choices shown for this account/video and selects the largest; it never assumes 4x exists.");
+  .string()
+  .min(2)
+  .max(80)
+  .describe("Exact normalized upscale ID returned by flow_inspect_account (for example 1080p, 2x, or 4k), none, or highest_available. Unsupported and unavailable choices fail explicitly.");
 const referenceFiles = z
   .array(z.string())
   .default([])
@@ -129,7 +131,7 @@ server.registerTool(
   "flow_inspect_account",
   {
     title: "Inspect Google Flow Account UI",
-    description: "Opens the specified Flow account without generating media and reports visible models, ratios, durations, upscale labels, login state, URL, and a diagnostic screenshot. Use before relying on an option whose availability may differ by account or region.",
+    description: "Opens the specified Flow account without generating media and returns a language-independent live capability map: exact image/video model IDs and labels, selected models, ratios, output counts, selectable durations, available and unavailable upscale/download choices from existing assets, UI language, login state, URL, and a diagnostic screenshot. Call this before generation; empty option arrays mean the current Flow UI does not expose that setting.",
     inputSchema: { accountId },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
@@ -146,14 +148,14 @@ server.registerTool(
   "flow_generate_video",
   {
     title: "Generate and Download a Google Flow Video",
-    description: "Uses the selected signed-in Google Flow account to configure a text/reference-to-video generation, wait for the generated clip, optionally choose 1x/2x/4x or the highest upscale actually offered in the asset menu, and download the result plus a manifest. This consumes Flow/AI credits and must only be called after explicit user authorization.",
+    description: "Uses the selected signed-in Google Flow account to configure a text/reference-to-video generation, wait for the generated clip, optionally choose an exact live upscale ID or highest_available, and download the result plus a manifest. This consumes Flow/AI credits and must only be called after explicit user authorization.",
     inputSchema: {
       accountId,
-      prompt: z.string().min(3).max(20_000).describe("Detailed English video prompt describing subject, action, setting, camera, lighting, style, and audio as desired."),
+      prompt: z.string().min(3).max(20_000).describe("Video prompt in any language, describing subject, action, setting, camera, lighting, style, and audio as desired."),
       flowProject: z.string().max(200).optional().describe("Existing Flow project name to open. If omitted, the current project is reused or a new project is created."),
-      model: z.string().default("ui-default").describe("Exact model label shown by Flow, such as 'Veo 3.1 - Fast' or 'Gemini Omni Flash'. Use 'ui-default' to keep Flow's current choice."),
-      aspectRatio: z.enum(["ui-default", "16:9", "9:16"]).default("ui-default").describe("Video aspect ratio. Use ui-default to keep the account's current setting."),
-      durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8), z.literal(10)]).optional().describe("Requested clip length. Flow validates whether the chosen model supports 4, 6, 8, or 10 seconds."),
+      model: z.string().default("ui-default").describe("Normalized video model ID returned by flow_inspect_account, e.g. omni-flash, veo-3-1-lite, veo-3-1-fast, or veo-3-1-quality. Exact visible labels are also accepted. Use ui-default to keep the selected model."),
+      aspectRatio: z.string().regex(/^(?:ui-default|\d+:\d+)$/).default("ui-default").describe("Exact video aspect ratio returned by flow_inspect_account, or ui-default."),
+      durationSeconds: z.number().int().min(1).max(120).optional().describe("Requested clip length only when flow_inspect_account reports that exact value in visibleDurations. Omit when the current Flow Agent UI exposes no duration control."),
       outputs: z.number().int().min(1).max(4).default(1).describe("Number of generated video outputs requested from Flow. Credits are typically charged per generation."),
       referenceFiles,
       upscale: upscale.default("none"),
@@ -197,10 +199,10 @@ server.registerTool(
     description: "Uses the selected signed-in Google Flow account to configure an image generation or edit with optional references, waits for the result, and downloads it with a reproducibility manifest. It may consume Flow/AI usage and must only be called after explicit user authorization.",
     inputSchema: {
       accountId,
-      prompt: z.string().min(3).max(20_000).describe("Detailed image prompt or edit instruction."),
+      prompt: z.string().min(3).max(20_000).describe("Detailed image prompt or edit instruction in any language."),
       flowProject: z.string().max(200).optional().describe("Existing Flow project name to open. If omitted, the current project is reused or a new project is created."),
-      model: z.string().default("ui-default").describe("Exact image model label shown by Flow, e.g. 'Nano Banana 2'. Use ui-default to keep Flow's choice."),
-      aspectRatio: z.enum(["ui-default", "16:9", "9:16", "1:1", "4:3", "3:4"]).default("ui-default").describe("Requested image aspect ratio or ui-default."),
+      model: z.string().default("ui-default").describe("Normalized image model ID returned by flow_inspect_account, e.g. nano-banana-pro, nano-banana-2, or nano-banana-2-lite. Exact visible labels are also accepted. Use ui-default to keep the selected model."),
+      aspectRatio: z.string().regex(/^(?:ui-default|\d+:\d+)$/).default("ui-default").describe("Exact image aspect ratio returned by flow_inspect_account, or ui-default."),
       outputs: z.number().int().min(1).max(4).default(1).describe("Number of image outputs requested."),
       referenceFiles,
       outputDirectory,
@@ -259,10 +261,10 @@ server.registerTool(
   "flow_upscale_video",
   {
     title: "Upscale an Existing Google Flow Video Job",
-    description: "Opens the video asset associated with an existing Flow job, discovers the upscale choices in its context menu, selects 1x/2x/4x or the highest option actually available, and waits for the new asset. This can consume Flow/AI credits and requires explicit authorization.",
+    description: "Opens the video asset associated with an existing Flow job, discovers live factor/resolution choices, rejects unavailable/upgrade-only options, selects an exact ID or the highest available option, and captures either the upscaled download or new asset. This can consume Flow/AI credits and requires explicit authorization.",
     inputSchema: {
       jobId: z.string().uuid().describe("UUID of an existing video generation job."),
-      factor: z.enum(["1x", "2x", "4x", "highest_available"]).describe("Requested UI option. Missing options produce an explicit error; they are never silently downgraded."),
+      factor: z.string().min(2).max(80).refine((value) => value !== "none", "Use a live upscale ID or highest_available, not none.").describe("Exact available upscale ID returned by flow_inspect_account, such as 1080p or 2x, or highest_available. Missing/unavailable options fail explicitly."),
       timeoutSeconds,
       confirmCreditSpend,
     },
