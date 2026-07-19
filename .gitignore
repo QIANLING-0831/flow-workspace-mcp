@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+*.tsbuildinfo
+
+# Runtime state belongs outside the repository, but ignore it if explicitly redirected here.
+.flow-mcp-data/
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

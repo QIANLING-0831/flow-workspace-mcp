@@ -1,0 +1,8 @@
+[mcp_servers.google_flow]
+command = "node"
+args = ["C:\\absolute\\path\\to\\flow-mcp\\dist\\index.js"]
+startup_timeout_sec = 30
+tool_timeout_sec = 1200
+
+[mcp_servers.google_flow.env]
+FLOW_MCP_HEADLESS = "0"
