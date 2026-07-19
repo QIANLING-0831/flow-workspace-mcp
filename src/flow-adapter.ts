@@ -290,6 +290,7 @@ export class FlowAdapter {
     const accountControl = await firstVisible([
       page.locator('button[aria-label*="Google Account" i], a[aria-label*="Google Account" i]'),
       page.locator('img[alt*="profile" i], img[alt*="account" i]'),
+      page.locator('button img[src*="googleusercontent.com/a/"]'),
     ]);
     return Boolean(accountControl);
   }
