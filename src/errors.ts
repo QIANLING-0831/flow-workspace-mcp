@@ -2,6 +2,7 @@ export type FlowErrorCode =
   | "validation_error"
   | "account_not_found"
   | "login_required"
+  | "flow_access_unavailable"
   | "ui_changed"
   | "unsupported_option"
   | "generation_failed"

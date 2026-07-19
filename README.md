@@ -96,6 +96,19 @@ No email entry, password entry, 2FA entry, cookie JSON, Chromium restart, or rem
 
 Generation and upscale tools require `confirmCreditSpend: true`. The agent should set it only after the user explicitly asks for a credit-consuming operation. Read-only inspection, status, and account-list tools do not spend credits.
 
+### Prevents browser-tool detours
+
+The MCP publishes a server-level execution contract as part of the MCP initialization handshake and repeats the critical rules in every relevant tool description and response:
+
+- Flow generation must use `flow_generate_video` or `flow_generate_image`
+- Generic browser, computer-use, keyboard, mouse, and web tools must never operate the Flow website
+- A generation has started only when a generation tool returns a persistent job ID
+- A Google account avatar is not treated as proof that the Flow workspace is available
+- The public Flow landing page is classified separately and causes an immediate `flow_access_unavailable` error
+- Only a workspace-verified account can become the default or spend credits
+
+This prevents an agent from scrolling around Flow's marketing site when the selected Google account is signed in but does not expose the generation workspace.
+
 ## Quick start
 
 ### Requirements
@@ -247,11 +260,12 @@ The expected agent workflow is:
 6. `flow_upscale_video` when requested
 7. `flow_download_job` for a ready asset that has not yet been downloaded
 
+`flow_list_accounts` returns `connectionStatus`, `connectedAccountIds`, `defaultAccountId`, and an explicit next action. After a successful connection, that account automatically becomes the verified default. Generation and inspection calls may omit `accountId` to use it; provide an ID only when the user deliberately selects another connected account.
+
 Example video tool input:
 
 ```json
 {
-  "accountId": "personal",
   "prompt": "A cinematic tracking shot through a rainy miniature neon city, shallow depth of field, reflections on wet streets, no text",
   "model": "omni-flash",
   "aspectRatio": "16:9",
@@ -295,6 +309,12 @@ The MCP never invents `4x`, silently downgrades a request, or substitutes an unr
 | `flow_download_job` | Download an already-created asset | No new generation |
 
 Every tool includes MCP-visible parameter descriptions so the agent knows how to use the live IDs returned by `flow_inspect_account`.
+
+### If an agent opens or scrolls the public Flow website
+
+That behavior is not a Flow MCP generation. Check the agent's tool trace: it must contain `flow_generate_video` or `flow_generate_image` and the response must contain a job ID. Version 0.1.1 and newer explicitly prohibit browser-tool fallback at the server, tool, and response levels. Refresh or restart the MCP client after upgrading so it reloads the current server instructions and tool schemas.
+
+If the MCP itself returns `flow_access_unavailable`, the selected Google identity is signed in but did not reach the Flow workspace. Run `flow_connect_account` and select another account that has Flow access. Do not browse or scroll the landing page.
 
 ## Runtime data and diagnostics
 

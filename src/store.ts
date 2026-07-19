@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FlowError } from "./errors.js";
 import { validateAccountId } from "./paths.js";
-import type { AccountOptions, AccountRecord, AccountsFile, FlowJob, GenerationRequest, JobStatus } from "./types.js";
+import type { AccountConnectionStatus, AccountOptions, AccountRecord, AccountsFile, FlowJob, GenerationRequest, JobStatus } from "./types.js";
 
 function platformDataDir(): string {
   if (process.env.FLOW_MCP_DATA_DIR) return path.resolve(process.env.FLOW_MCP_DATA_DIR);
@@ -58,7 +58,18 @@ export class FlowStore {
 
   async listAccounts(): Promise<AccountsFile> {
     await this.initialize();
-    return readJson<AccountsFile>(this.accountsFile, { version: 1, accounts: [] });
+    const file = await readJson<AccountsFile>(this.accountsFile, { version: 1, accounts: [] });
+    for (const account of file.accounts) {
+      account.connectionStatus ??= account.headlessAfterLogin ? "connected" : "unverified";
+    }
+    const connected = file.accounts
+      .filter((account) => account.connectionStatus === "connected")
+      .sort((left, right) => this.accountRecency(right).localeCompare(this.accountRecency(left)));
+    if (!file.defaultAccountId || !connected.some((account) => account.id === file.defaultAccountId)) {
+      if (connected[0]) file.defaultAccountId = connected[0].id;
+      else delete file.defaultAccountId;
+    }
+    return file;
   }
 
   async ensureAccount(accountId: string, label?: string, options: AccountOptions = {}): Promise<AccountRecord> {
@@ -98,7 +109,6 @@ export class FlowStore {
         ...(options.browserExecutablePath ? { browserExecutablePath: options.browserExecutablePath } : {}),
       };
       file.accounts.push(account);
-      if (!file.defaultAccountId) file.defaultAccountId = id;
       await atomicWriteJson(this.accountsFile, file);
       await mkdir(this.profileDir(id), { recursive: true });
       return account;
@@ -121,6 +131,16 @@ export class FlowStore {
     const requested = accountId ? validateAccountId(accountId) : file.defaultAccountId;
     const account = file.accounts.find((item) => item.id === requested);
     if (!account) {
+      if (!requested && file.accounts.length > 0) {
+        throw new FlowError(
+          "login_required",
+          "No verified connected Flow account is available.",
+          [
+            "Call flow_connect_account to connect an account that exposes the Flow generation workspace.",
+            "Do not select an unverified account or substitute generic browser/computer-use automation.",
+          ],
+        );
+      }
       throw new FlowError(
         "account_not_found",
         requested ? `Flow account '${requested}' is not configured.` : "No Flow account is configured.",
@@ -128,6 +148,29 @@ export class FlowStore {
       );
     }
     return account;
+  }
+
+  async requireConnectedAccount(accountId?: string): Promise<AccountRecord> {
+    const account = await this.requireAccount(accountId);
+    if (account.connectionStatus === "connected") return account;
+    if (account.connectionStatus === "access_unavailable") {
+      throw new FlowError(
+        "flow_access_unavailable",
+        `Google account '${account.id}' is signed in, but its saved session does not expose the Flow generation workspace.`,
+        [
+          "Use flow_connect_account to select a Google account that has Flow access.",
+          "Do not open, scroll, or automate the public Flow website with browser/computer-use tools.",
+        ],
+      );
+    }
+    throw new FlowError(
+      "login_required",
+      `Flow account '${account.id}' is not a verified connected session.`,
+      [
+        `Call flow_connect_account with accountId '${account.id}' before generation.`,
+        "Do not substitute browser/computer-use automation for the Google Flow MCP tools.",
+      ],
+    );
   }
 
   async touchAccount(accountId: string): Promise<void> {
@@ -148,6 +191,18 @@ export class FlowStore {
       account.headlessAfterLogin = enabled;
       await atomicWriteJson(this.accountsFile, file);
     });
+  }
+
+  async markAccountConnected(accountId: string, makeDefault = true): Promise<void> {
+    await this.setAccountConnection(accountId, "connected", undefined, makeDefault);
+  }
+
+  async markAccountNeedsReconnect(accountId: string, error?: string): Promise<void> {
+    await this.setAccountConnection(accountId, "needs_reconnect", error);
+  }
+
+  async markAccountAccessUnavailable(accountId: string, error?: string): Promise<void> {
+    await this.setAccountConnection(accountId, "access_unavailable", error);
   }
 
   profileDir(accountId: string): string {
@@ -215,6 +270,37 @@ export class FlowStore {
     } finally {
       release();
     }
+  }
+
+  private async setAccountConnection(
+    accountId: string,
+    connectionStatus: AccountConnectionStatus,
+    error?: string,
+    makeDefault = false,
+  ): Promise<void> {
+    await this.withAccountsLock(async () => {
+      const file = await this.listAccounts();
+      const account = file.accounts.find((item) => item.id === accountId);
+      if (!account) return;
+      account.connectionStatus = connectionStatus;
+      account.lastValidatedAt = new Date().toISOString();
+      if (error) account.lastValidationError = error;
+      else delete account.lastValidationError;
+      if (connectionStatus === "connected" && makeDefault) {
+        file.defaultAccountId = account.id;
+      } else if (connectionStatus !== "connected" && file.defaultAccountId === account.id) {
+        const fallback = file.accounts
+          .filter((item) => item.id !== account.id && item.connectionStatus === "connected")
+          .sort((left, right) => this.accountRecency(right).localeCompare(this.accountRecency(left)))[0];
+        if (fallback) file.defaultAccountId = fallback.id;
+        else delete file.defaultAccountId;
+      }
+      await atomicWriteJson(this.accountsFile, file);
+    });
+  }
+
+  private accountRecency(account: AccountRecord): string {
+    return account.lastValidatedAt ?? account.lastOpenedAt ?? account.createdAt;
   }
 
   private validateCdpUrl(value: string): string {

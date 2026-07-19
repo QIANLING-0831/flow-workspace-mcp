@@ -33,6 +33,21 @@ interface AgentSettingsCapabilities {
   durationSeconds: number[];
 }
 
+interface PageAccessState {
+  signedIn: boolean;
+  workspaceAvailable: boolean;
+  pageKind: "workspace" | "signed_out" | "landing_or_unavailable";
+}
+
+export function classifyPageAccess(signedIn: boolean, workspaceAvailable: boolean): PageAccessState {
+  if (workspaceAvailable) return { signedIn: true, workspaceAvailable: true, pageKind: "workspace" };
+  return {
+    signedIn,
+    workspaceAvailable: false,
+    pageKind: signedIn ? "landing_or_unavailable" : "signed_out",
+  };
+}
+
 function unique(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
@@ -124,34 +139,62 @@ export class FlowAdapter {
       await this.store.touchAccount(account.id);
       const deadline = Date.now() + waitSeconds * 1_000;
       let chooserCompleted = !options.chooseGoogleAccount;
-      let signedIn = chooserCompleted && await this.isSignedIn(page);
-      while (!signedIn && Date.now() < deadline) {
+      let access = chooserCompleted
+        ? await this.pageAccessState(page)
+        : { signedIn: false, workspaceAvailable: false, pageKind: "signed_out" as const };
+      let noWorkspaceSince: number | undefined;
+      while (!access.workspaceAvailable && Date.now() < deadline) {
         await page.waitForTimeout(1_000);
         if (!chooserCompleted && /^https:\/\/myaccount\.google\.com(?:\/|$)/i.test(page.url())) {
           chooserCompleted = true;
           await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
         }
-        signedIn = await this.isSignedIn(page);
+        access = await this.pageAccessState(page);
+        if (chooserCompleted && access.signedIn && !access.workspaceAvailable) {
+          noWorkspaceSince ??= Date.now();
+          if (Date.now() - noWorkspaceSince >= 5_000) break;
+        } else {
+          noWorkspaceSince = undefined;
+        }
       }
-      if (!signedIn && waitSeconds > 0) {
+      if (!access.workspaceAvailable && access.signedIn) {
+        const message = `Google account '${account.id}' is signed in, but Flow opened its public landing page instead of the generation workspace.`;
+        await this.store.markAccountAccessUnavailable(account.id, message);
+        if (!attached) await this.browsers.reset(account.id);
+        throw new FlowError(
+          "flow_access_unavailable",
+          message,
+          [
+            "Call flow_connect_account again and select an account that has Google Flow access.",
+            "Do not open, scroll, or automate the landing page with generic browser/computer-use tools.",
+          ],
+        );
+      }
+      if (!access.workspaceAvailable && waitSeconds > 0) {
+        const message = `The existing Google session received from Chromium was not accepted by Flow within ${waitSeconds} seconds.`;
+        await this.store.markAccountNeedsReconnect(account.id, message);
+        if (!attached) await this.browsers.reset(account.id);
         throw new FlowError(
           "login_required",
-          `The existing Google session received from Chromium was not accepted by Flow within ${waitSeconds} seconds.`,
+          message,
           ["Choose one of the accounts already shown in the account chooser, then call flow_connect_account again."],
         );
       }
       const currentUrl = page.url();
-      if (signedIn && !attached) {
+      if (access.workspaceAvailable) {
+        await this.store.markAccountConnected(account.id);
+      }
+      if (access.workspaceAvailable && !attached) {
         await this.store.setHeadlessAfterLogin(account.id, true);
         await this.browsers.reset(account.id);
       }
       return [
-        `${signedIn ? "Connected" : "Opened"} Google Flow account '${account.id}' (${account.label}).`,
+        `${access.workspaceAvailable ? "Connected" : "Opened"} Google Flow account '${account.id}' (${account.label}).`,
         account.browserMode === "attach_cdp"
           ? `Attached to Chromium CDP: ${account.cdpUrl}`
           : `Connected through Flow Login Bridge (${transferred?.cookies.length ?? 0} Google session cookies transferred locally).`,
         `Current URL: ${currentUrl}`,
-        signedIn
+        access.workspaceAvailable
           ? attached
             ? "The session is signed in and ready. The attached browser remains open."
             : "The session is signed in and ready. The temporary login window was closed; future automation runs invisibly."
@@ -160,13 +203,41 @@ export class FlowAdapter {
     });
   }
 
-  async inspect(accountId: string): Promise<UiCapabilities> {
+  async inspect(accountId?: string): Promise<UiCapabilities> {
     const account = await this.store.requireAccount(accountId);
     return this.browsers.runExclusive(account.id, async () => {
       const page = await this.readyPage(account.id, false);
-      const signedIn = await this.isSignedIn(page);
-      if (signedIn) await this.openProject(page).catch(() => undefined);
+      const access = await this.waitForAccessState(page, 8_000);
+      if (access.workspaceAvailable) await this.store.markAccountConnected(account.id, false);
+      else if (access.signedIn) {
+        await this.store.markAccountAccessUnavailable(account.id, "Flow opened its public landing page instead of the generation workspace.");
+      } else {
+        await this.store.markAccountNeedsReconnect(account.id, "The saved Flow session is signed out.");
+      }
       const body = await page.locator("body").innerText().catch(() => "");
+      if (!access.workspaceAvailable) {
+        const screenshot = this.store.diagnosticPath(`inspect-${account.id}`);
+        await page.screenshot({ path: screenshot, fullPage: false });
+        return {
+          url: page.url(),
+          signedIn: access.signedIn,
+          workspaceAvailable: false,
+          pageKind: access.pageKind,
+          agentInstruction: access.signedIn
+            ? "Stop. This Google account does not expose the Flow generation workspace. Call flow_connect_account for another account; never browse or scroll the public Flow page."
+            : "Stop. Call flow_connect_account for this account; never use generic browser automation to log in or operate Flow.",
+          language: await page.locator("html").getAttribute("lang").then((value) => value || "unknown").catch(() => "unknown"),
+          visibleModels: [],
+          visibleAspectRatios: [],
+          visibleDurations: [],
+          availableUpscales: [],
+          unavailableUpscales: [],
+          upscaleOptions: [],
+          pageTextExcerpt: body.slice(0, 2_000),
+          screenshot,
+        };
+      }
+      await this.openProject(page).catch(() => undefined);
       const durationHints = uniqueNumbers(body.split(/\n+/)
         .map(parseDurationSeconds)
         .filter((value): value is number => value !== undefined));
@@ -204,7 +275,10 @@ export class FlowAdapter {
       await page.screenshot({ path: screenshot, fullPage: false });
       return {
         url: page.url(),
-        signedIn,
+        signedIn: true,
+        workspaceAvailable: true,
+        pageKind: "workspace",
+        agentInstruction: "Use only the returned live options with flow_generate_video or flow_generate_image. Do not operate Flow through generic browser/computer-use tools.",
         language: await page.locator("html").getAttribute("lang").then((value) => value || "unknown").catch(() => "unknown"),
         ...(agentCapabilities ? {
           models: agentCapabilities.models,
@@ -232,7 +306,7 @@ export class FlowAdapter {
   }
 
   async generate(request: GenerationRequest): Promise<FlowJob> {
-    const account = await this.store.requireAccount(request.accountId);
+    const account = await this.store.requireConnectedAccount(request.accountId);
     const job = await this.store.createJob({ ...request, accountId: account.id });
     return this.browsers.runExclusive(account.id, async () => {
       let page: Page | undefined;
@@ -277,7 +351,7 @@ export class FlowAdapter {
       } catch (error) {
         const screenshot = page ? await this.captureDiagnostic(page, `job-${job.id}`) : undefined;
         const message = error instanceof Error ? error.message : String(error);
-        const status = error instanceof FlowError && error.code === "login_required" ? "needs_attention" : "failed";
+        const status = error instanceof FlowError && ["login_required", "flow_access_unavailable"].includes(error.code) ? "needs_attention" : "failed";
         await this.store.updateJob(job, status, {
           error: message,
           ...(screenshot ? { diagnosticScreenshot: screenshot } : {}),
@@ -329,14 +403,58 @@ export class FlowAdapter {
       await page.goto(url, { waitUntil: "domcontentloaded" });
     }
     await page.waitForTimeout(1_000);
-    if (requireLogin && !(await this.isSignedIn(page))) {
-      throw new FlowError(
-        "login_required",
-        `Google Flow account '${accountId}' is not signed in.`,
-        [`Call flow_connect_account with accountId '${accountId}'; it will detect completion automatically.`],
-      );
+    if (requireLogin) {
+      const access = await this.waitForAccessState(page, 8_000);
+      if (!access.signedIn) {
+        await this.store.markAccountNeedsReconnect(accountId, "The saved Flow session is signed out.");
+        throw new FlowError(
+          "login_required",
+          `Google Flow account '${accountId}' is not signed in.`,
+          [
+            `Call flow_connect_account with accountId '${accountId}'; it will detect completion automatically.`,
+            "Never substitute generic browser/computer-use automation for the MCP login or generation tools.",
+          ],
+        );
+      }
+      if (!access.workspaceAvailable) {
+        const message = `Google account '${accountId}' is signed in, but Flow opened its public landing page instead of the generation workspace.`;
+        await this.store.markAccountAccessUnavailable(accountId, message);
+        throw new FlowError(
+          "flow_access_unavailable",
+          message,
+          [
+            "Call flow_connect_account and select an account that has Flow access.",
+            "Do not open, scroll, click, or automate the public Flow page with browser/computer-use tools.",
+          ],
+        );
+      }
+      await this.store.markAccountConnected(accountId, false);
     }
     return page;
+  }
+
+  private async pageAccessState(page: Page): Promise<PageAccessState> {
+    const workspaceAvailable = await this.hasWorkspace(page);
+    const signedIn = await this.isSignedIn(page);
+    return classifyPageAccess(signedIn, workspaceAvailable);
+  }
+
+  private async waitForAccessState(page: Page, timeoutMs: number): Promise<PageAccessState> {
+    const deadline = Date.now() + timeoutMs;
+    let state = await this.pageAccessState(page);
+    while (!state.workspaceAvailable && Date.now() < deadline) {
+      await page.waitForTimeout(500);
+      state = await this.pageAccessState(page);
+    }
+    return state;
+  }
+
+  private async hasWorkspace(page: Page): Promise<boolean> {
+    if (/\/tools\/flow\/project\//i.test(page.url())) return true;
+    if (await firstVisible([this.promptLocator(page)])) return true;
+    if (await page.locator('a[href*="/tools/flow/project/"]').count().catch(() => 0)) return true;
+    const createControls = page.locator("button").filter({ has: page.locator("i", { hasText: /^add_2$/ }) });
+    return (await createControls.count().catch(() => 0)) > 0;
   }
 
   private async isSignedIn(page: Page): Promise<boolean> {

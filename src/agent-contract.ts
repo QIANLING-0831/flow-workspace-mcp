@@ -1,0 +1,15 @@
+export const FLOW_AGENT_INSTRUCTIONS = `Google Flow operations must use this MCP server's flow_* tools exclusively.
+
+Mandatory workflow, regardless of the user's language:
+1. Call flow_list_accounts. Use its defaultAccountId when it identifies a connected account; do not guess an account ID.
+2. If no connected account exists, call flow_connect_account and wait for the user to select an existing Google account through Flow Login Bridge.
+3. Call flow_inspect_account before generation and use only options it reports as available.
+4. Call flow_generate_video or flow_generate_image for generation. Use flow_job_status, flow_upscale_video, and flow_download_job for follow-up work.
+
+A direct user request to make, create, or generate media is explicit authorization for that requested generation, so set confirmCreditSpend=true. Do not call flow_login_bridge_status during normal generation; it is only a connection diagnostic. Translate the user's intent from any language, but pass normalized model, aspect-ratio, duration, output-count, and upscale IDs exactly as flow_inspect_account reports them.
+
+Never open, navigate, scroll, click, or automate labs.google/fx/tools/flow using generic browser, computer-use, keyboard, mouse, Playwright, or web tools. The MCP owns all Flow browser interaction. A public/marketing Flow page is not a generation workspace. If a flow_* tool reports login_required or flow_access_unavailable, stop and report that exact error or call flow_connect_account; never compensate with browser automation. Never claim a generation started unless flow_generate_video or flow_generate_image returned a Flow job ID.`;
+
+export const FLOW_TOOL_GUARD = "Use this tool for Google Flow; never substitute generic browser/computer-use automation on the Flow website.";
+
+export const FLOW_ACCOUNT_GUIDANCE = "Omit accountId to use the most recently verified connected account. Supply it only when the user explicitly chose a different connected account returned by flow_list_accounts.";

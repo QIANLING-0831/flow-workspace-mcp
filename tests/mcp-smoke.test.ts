@@ -24,6 +24,9 @@ test("MCP server exposes the intended Flow tools", async (context) => {
   context.after(async () => client.close());
   await client.connect(transport);
 
+  assert.match(client.getInstructions() ?? "", /must use this MCP server's flow_\* tools exclusively/i);
+  assert.match(client.getInstructions() ?? "", /Never open, navigate, scroll, click, or automate/i);
+
   const listed = await client.listTools();
   assert.deepEqual(
     listed.tools.map((tool) => tool.name).sort(),
@@ -39,7 +42,11 @@ test("MCP server exposes the intended Flow tools", async (context) => {
       "flow_upscale_video",
     ],
   );
+  const videoTool = listed.tools.find((tool) => tool.name === "flow_generate_video");
+  assert.match(videoTool?.description ?? "", /REQUIRED AND EXCLUSIVE PATH/);
+  assert.equal((videoTool?.inputSchema.required as string[] | undefined)?.includes("accountId") ?? false, false);
   const accounts = await client.callTool({ name: "flow_list_accounts", arguments: {} });
   assert.equal(accounts.isError, undefined);
   assert.match((accounts.content[0] as { type: "text"; text: string }).text, /"accounts": \[\]/);
+  assert.match((accounts.content[0] as { type: "text"; text: string }).text, /No verified default account exists/);
 });

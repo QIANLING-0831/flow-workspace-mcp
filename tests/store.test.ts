@@ -5,21 +5,44 @@ import path from "node:path";
 import test from "node:test";
 import { FlowStore } from "../src/store.js";
 
-test("accounts use isolated profile directories and a stable default", async (context) => {
+test("only verified accounts become the default and the latest connection wins", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-store-"));
   context.after(async () => rm(temporary, { recursive: true, force: true }));
   const store = new FlowStore(temporary);
 
   await store.ensureAccount("personal", "Personal");
   await store.ensureAccount("studio", "Studio");
-  const accounts = await store.listAccounts();
+  let accounts = await store.listAccounts();
 
-  assert.equal(accounts.defaultAccountId, "personal");
+  assert.equal(accounts.defaultAccountId, undefined);
   assert.deepEqual(accounts.accounts.map((account) => account.id), ["personal", "studio"]);
   assert.notEqual(store.profileDir("personal"), store.profileDir("studio"));
-  assert.equal((await store.requireAccount()).id, "personal");
+  await assert.rejects(() => store.requireConnectedAccount(), /No verified connected Flow account is available/);
+  await store.markAccountConnected("personal");
+  assert.equal((await store.requireConnectedAccount()).id, "personal");
   await store.setHeadlessAfterLogin("personal", true);
   assert.equal((await store.requireAccount("personal")).headlessAfterLogin, true);
+  await store.markAccountConnected("studio");
+  accounts = await store.listAccounts();
+  assert.equal(accounts.defaultAccountId, "studio");
+  await store.markAccountConnected("personal", false);
+  assert.equal((await store.listAccounts()).defaultAccountId, "studio");
+  await store.markAccountNeedsReconnect("studio", "expired");
+  accounts = await store.listAccounts();
+  assert.equal(accounts.defaultAccountId, "personal");
+  assert.equal((await store.requireAccount("studio")).lastValidationError, "expired");
+});
+
+test("a signed-in landing page account cannot be used for generation", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-store-access-"));
+  context.after(async () => rm(temporary, { recursive: true, force: true }));
+  const store = new FlowStore(temporary);
+  await store.ensureAccount("landing", "Wrong subscription");
+  await store.markAccountAccessUnavailable("landing", "public landing page");
+  await assert.rejects(() => store.requireConnectedAccount("landing"), (error: Error) => {
+    assert.match(error.message, /does not expose the Flow generation workspace/);
+    return true;
+  });
 });
 
 test("jobs persist without browser state", async (context) => {

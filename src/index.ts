@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { FLOW_ACCOUNT_GUIDANCE, FLOW_AGENT_INSTRUCTIONS, FLOW_TOOL_GUARD } from "./agent-contract.js";
 import { BrowserManager } from "./browser-manager.js";
 import { CookieBridge } from "./cookie-bridge.js";
 import { errorText, FlowError } from "./errors.js";
@@ -19,8 +20,10 @@ const flow = new FlowAdapter(store, browsers, cookieBridge);
 
 const server = new McpServer({
   name: "flow-mcp",
-  version: "0.1.0",
+  version: "0.1.1",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
+}, {
+  instructions: FLOW_AGENT_INSTRUCTIONS,
 });
 
 function ok(value: string | FlowJob | UiCapabilities | unknown): { content: Array<{ type: "text"; text: string }> } {
@@ -38,6 +41,7 @@ const accountId = z
   .min(1)
   .max(48)
   .describe("Local account profile ID such as 'personal' or 'studio'. Each managed ID has an isolated persistent Chromium profile.");
+const connectedAccountId = accountId.optional().describe(FLOW_ACCOUNT_GUIDANCE);
 const upscale = z
   .string()
   .min(2)
@@ -65,13 +69,20 @@ server.registerTool(
   "flow_list_accounts",
   {
     title: "List Google Flow Accounts",
-    description: "Lists locally configured Google Flow account profiles and the default account. This is read-only and never opens Chrome or contacts Google.",
+    description: `MANDATORY FIRST STEP for Google Flow work. Lists account connectionStatus values and the verified default account. Use the connected default; never guess an ID. ${FLOW_TOOL_GUARD}`,
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async () => {
     try {
-      return ok(await store.listAccounts());
+      const accounts = await store.listAccounts();
+      return ok({
+        ...accounts,
+        connectedAccountIds: accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id),
+        agentInstruction: accounts.defaultAccountId
+          ? `Use account '${accounts.defaultAccountId}' unless the user explicitly chose another connected account. Next call flow_inspect_account; never open Flow with browser/computer-use tools.`
+          : "No verified default account exists. Call flow_connect_account; never open Flow with browser/computer-use tools.",
+      });
     } catch (error) {
       return failed(error);
     }
@@ -82,7 +93,7 @@ server.registerTool(
   "flow_login_bridge_status",
   {
     title: "Check Flow Login Bridge",
-    description: "Reports whether the localhost Flow Login Bridge is running and waiting for the Chromium extension. This read-only diagnostic never reads cookies, opens a browser, contacts Google, or changes account state.",
+    description: "Login diagnostic only. Reports whether the localhost Flow Login Bridge is waiting for the Chromium extension. Do not use this for generation and do not open Flow with browser tools. Normally call flow_list_accounts first.",
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -99,7 +110,7 @@ server.registerTool(
   "flow_connect_account",
   {
     title: "Connect a Google Flow Account",
-    description: "Connects Google Flow using accounts already signed into the user's normal Chromium profile. The user clicks Connect Flow in the bridge extension; session cookies move only over localhost into an isolated Flow session, then Google shows the existing-account chooser. No email, password, 2FA, cookie JSON, browser restart, debug flag, or main-browser tab management is required. Call again to connect another existing Google account.",
+    description: `The exclusive MCP login path. Connects an account already signed into normal Chromium through Flow Login Bridge, verifies that the actual generation workspace—not the public landing page—is available, and makes the successful account the default. No password, 2FA, browser restart, or generic browser automation is needed. ${FLOW_TOOL_GUARD}`,
     inputSchema: {
       accountId: accountId.optional().describe("Optional local ID. Omit for the simplest setup; a safe ID is created automatically."),
       label: z.string().max(100).optional().describe("Optional local label. Omit to reuse the selected normal browser profile's name."),
@@ -131,8 +142,8 @@ server.registerTool(
   "flow_inspect_account",
   {
     title: "Inspect Google Flow Account UI",
-    description: "Opens the specified Flow account without generating media and returns a language-independent live capability map: exact image/video model IDs and labels, selected models, ratios, output counts, selectable durations, available and unavailable upscale/download choices from existing assets, UI language, login state, URL, and a diagnostic screenshot. Call this before generation; empty option arrays mean the current Flow UI does not expose that setting.",
-    inputSchema: { accountId },
+    description: `MANDATORY before generation. Verifies the real Flow workspace and returns a language-independent live capability map. A landing page returns workspaceAvailable=false and a stop instruction; never browse or scroll it. ${FLOW_TOOL_GUARD}`,
+    inputSchema: { accountId: connectedAccountId },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   async ({ accountId: id }) => {
@@ -148,9 +159,9 @@ server.registerTool(
   "flow_generate_video",
   {
     title: "Generate and Download a Google Flow Video",
-    description: "Uses the selected signed-in Google Flow account to configure a text/reference-to-video generation, wait for the generated clip, optionally choose an exact live upscale ID or highest_available, and download the result plus a manifest. This consumes Flow/AI credits and must only be called after explicit user authorization.",
+    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow video request. Creates a persistent job, generates through the verified workspace, optionally upscales, and downloads locally. Never open or control Flow with browser/computer-use tools. A generation started only if this tool returns a job ID. Requires explicit credit authorization.`,
     inputSchema: {
-      accountId,
+      accountId: connectedAccountId,
       prompt: z.string().min(3).max(20_000).describe("Video prompt in any language, describing subject, action, setting, camera, lighting, style, and audio as desired."),
       flowProject: z.string().max(200).optional().describe("Existing Flow project name to open. If omitted, the current project is reused or a new project is created."),
       model: z.string().default("ui-default").describe("Normalized video model ID returned by flow_inspect_account, e.g. omni-flash, veo-3-1-lite, veo-3-1-fast, or veo-3-1-quality. Exact visible labels are also accepted. Use ui-default to keep the selected model."),
@@ -169,8 +180,9 @@ server.registerTool(
   },
   async (input) => {
     try {
+      const account = await store.requireConnectedAccount(input.accountId);
       const request: GenerationRequest = {
-        accountId: input.accountId,
+        accountId: account.id,
         mediaType: "video",
         prompt: input.prompt,
         outputs: input.outputs,
@@ -196,9 +208,9 @@ server.registerTool(
   "flow_generate_image",
   {
     title: "Generate and Download a Google Flow Image",
-    description: "Uses the selected signed-in Google Flow account to configure an image generation or edit with optional references, waits for the result, and downloads it with a reproducibility manifest. It may consume Flow/AI usage and must only be called after explicit user authorization.",
+    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow image request. Creates a persistent job, generates or edits through the verified workspace, and downloads locally. Never open or control Flow with browser/computer-use tools. A generation started only if this tool returns a job ID. Requires explicit credit authorization.`,
     inputSchema: {
-      accountId,
+      accountId: connectedAccountId,
       prompt: z.string().min(3).max(20_000).describe("Detailed image prompt or edit instruction in any language."),
       flowProject: z.string().max(200).optional().describe("Existing Flow project name to open. If omitted, the current project is reused or a new project is created."),
       model: z.string().default("ui-default").describe("Normalized image model ID returned by flow_inspect_account, e.g. nano-banana-pro, nano-banana-2, or nano-banana-2-lite. Exact visible labels are also accepted. Use ui-default to keep the selected model."),
@@ -215,8 +227,9 @@ server.registerTool(
   },
   async (input) => {
     try {
+      const account = await store.requireConnectedAccount(input.accountId);
       const request: GenerationRequest = {
-        accountId: input.accountId,
+        accountId: account.id,
         mediaType: "image",
         prompt: input.prompt,
         outputs: input.outputs,
@@ -241,7 +254,7 @@ server.registerTool(
   "flow_job_status",
   {
     title: "Check a Google Flow Job",
-    description: "Loads a persistent Flow job, briefly checks the corresponding account/project for a finished asset, and returns its current state, diagnostics, chosen upscale, downloads, and media metadata. This does not spend credits.",
+    description: `The exclusive status path for jobs returned by a Flow generation tool. Never inspect the Flow website with generic browser/computer-use tools. Returns state, diagnostics, chosen upscale, downloads, and media metadata without spending credits.`,
     inputSchema: {
       jobId: z.string().uuid().describe("UUID returned by flow_generate_video or flow_generate_image."),
       waitSeconds: z.number().int().min(0).max(60).default(10).describe("Seconds to poll before returning; use 0 for an immediate snapshot."),
@@ -261,7 +274,7 @@ server.registerTool(
   "flow_upscale_video",
   {
     title: "Upscale an Existing Google Flow Video Job",
-    description: "Opens the video asset associated with an existing Flow job, discovers live factor/resolution choices, rejects unavailable/upgrade-only options, selects an exact ID or the highest available option, and captures either the upscaled download or new asset. This can consume Flow/AI credits and requires explicit authorization.",
+    description: `The exclusive path for real Flow video upscaling. Uses live available options and rejects unavailable/upgrade-only choices. Never right-click or control Flow with generic browser/computer-use tools. May consume credits and requires explicit authorization.`,
     inputSchema: {
       jobId: z.string().uuid().describe("UUID of an existing video generation job."),
       factor: z.string().min(2).max(80).refine((value) => value !== "none", "Use a live upscale ID or highest_available, not none.").describe("Exact available upscale ID returned by flow_inspect_account, such as 1080p or 2x, or highest_available. Missing/unavailable options fail explicitly."),
@@ -283,7 +296,7 @@ server.registerTool(
   "flow_download_job",
   {
     title: "Download an Existing Google Flow Job",
-    description: "Downloads the newest visible asset or outputs associated with an existing Flow job into its configured absolute output directory, validates files with ffprobe when installed, writes .flow.json manifests, and returns local paths. This does not start a new generation.",
+    description: `The exclusive path to download an existing Flow job. Never download through generic browser/computer-use tools. Saves to the configured absolute directory, validates files, writes manifests, and does not start a generation.`,
     inputSchema: { jobId: z.string().uuid().describe("UUID of a ready Flow video or image job.") },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },

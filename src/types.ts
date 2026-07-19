@@ -2,6 +2,7 @@ export const FLOW_URL = "https://labs.google/fx/tools/flow";
 
 export type MediaType = "video" | "image";
 export type UpscaleFactor = string;
+export type AccountConnectionStatus = "unverified" | "connected" | "needs_reconnect" | "access_unavailable";
 export type JobStatus =
   | "created"
   | "configuring"
@@ -23,6 +24,9 @@ export interface AccountRecord {
   cdpUrl?: string;
   browserExecutablePath?: string;
   headlessAfterLogin?: boolean;
+  connectionStatus?: AccountConnectionStatus;
+  lastValidatedAt?: string;
+  lastValidationError?: string;
 }
 
 export interface AccountOptions {
@@ -113,6 +117,9 @@ export interface GenerationRequest {
 export interface UiCapabilities {
   url: string;
   signedIn: boolean;
+  workspaceAvailable: boolean;
+  pageKind: "workspace" | "signed_out" | "landing_or_unavailable";
+  agentInstruction: string;
   language?: string;
   models?: {
     image: Array<{ id: string; label: string; selected: boolean }>;
