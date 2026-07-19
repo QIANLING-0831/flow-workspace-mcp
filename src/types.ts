@@ -71,6 +71,10 @@ export interface MediaProbe {
   ffprobeAvailable: boolean;
 }
 
+export interface MediaAssetIdentity {
+  keys: string[];
+}
+
 export interface FlowJob {
   id: string;
   accountId: string;
@@ -93,6 +97,8 @@ export interface FlowJob {
   error?: string;
   diagnosticScreenshot?: string;
   baselineMediaCount?: number;
+  baselineMediaKeys?: string[];
+  generatedAssets?: MediaAssetIdentity[];
   createdAt: string;
   updatedAt: string;
 }

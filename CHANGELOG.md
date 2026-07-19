@@ -2,6 +2,16 @@
 
 All notable changes to Google Flow MCP are documented here.
 
+## [0.2.1] - 2026-07-19
+
+### Fixed
+
+- Replaced positional “last gallery item” downloads with exact per-job asset identity tracking
+- Generation now snapshots pre-existing media, records only newly created asset identities, and carries them through status, upscale, and download operations
+- Multi-output jobs wait for the requested number of new, ready assets instead of accepting the first count increase
+- Missing or ambiguous asset identities fail closed instead of downloading an unrelated older asset
+- Added regression tests for reordered galleries, durable URL matching, and ambiguous identity rejection
+
 ## [0.2.0] - 2026-07-19
 
 ### Added
@@ -76,3 +86,4 @@ All notable changes to Google Flow MCP are documented here.
 [0.1.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.1.0
 [0.1.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.1.1
 [0.2.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.0
+[0.2.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.1

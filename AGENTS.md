@@ -52,3 +52,8 @@ If a hard requirement fails, report the exact failing prerequisite. Do not patch
 
 When the user asks what Flow MCP can do, call `flow_help` and answer in the user's language with concrete examples. Do not answer only with internal tool names.
 
+## Runtime media safety
+
+- Treat the job ID returned by a generation tool as the only authority for later status, upscale, and download operations.
+- Never replace `flow_download_job` with a generic browser download or a guessed “latest” gallery item.
+- The server tracks the exact asset identities created after each submission. If it returns `job_asset_identity_missing` or `generated_asset_not_found`, report the error and ask the user to regenerate; do not guess an asset.

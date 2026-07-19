@@ -7,6 +7,8 @@ export type FlowErrorCode =
   | "unsupported_option"
   | "generation_failed"
   | "generation_timeout"
+  | "job_asset_identity_missing"
+  | "generated_asset_not_found"
   | "download_failed"
   | "browser_error"
   | "internal_error";

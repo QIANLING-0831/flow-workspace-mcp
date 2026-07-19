@@ -22,7 +22,7 @@ const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.ur
 
 const server = new McpServer({
   name: "flow-mcp",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 }, {
   instructions: FLOW_AGENT_INSTRUCTIONS,
@@ -88,6 +88,7 @@ server.registerTool(
           "Select live aspect ratios, output counts, and durations when Flow exposes them",
           "Attach local image/video references, ingredients, or frames",
           "Use Flow's available video upscale options such as 1080p or highest_available",
+          "Track each job's exact generated assets so gallery reordering cannot substitute an older file",
           "Download media plus reproducibility manifests, hashes, and optional FFprobe metadata",
           "Keep multiple Google Flow accounts in isolated local sessions",
         ],
@@ -378,8 +379,8 @@ server.registerTool(
   "flow_download_job",
   {
     title: "Download an Existing Google Flow Job",
-    description: `The exclusive path to download an existing Flow job. Never download through generic browser/computer-use tools. Saves to the configured absolute directory, validates files, writes manifests, and does not start a generation.`,
-    inputSchema: { jobId: z.string().uuid().describe("UUID of a ready Flow video or image job.") },
+    description: `The exclusive path to download an existing Flow job. Uses the exact asset identities recorded for that job and fails instead of guessing from gallery order. Never download through generic browser/computer-use tools. Saves to the configured absolute directory, validates files, writes manifests, and does not start a generation.`,
+    inputSchema: { jobId: z.string().uuid().describe("Exact UUID returned by the video or image generation whose asset must be downloaded. Never substitute a different or guessed job ID.") },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   async ({ jobId }) => {

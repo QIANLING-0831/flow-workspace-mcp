@@ -6,6 +6,13 @@ import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, pars
 import { CookieBridge } from "./cookie-bridge.js";
 import { FlowError } from "./errors.js";
 import { probeMedia } from "./media.js";
+import {
+  flattenMediaKeys,
+  identitiesFor,
+  resolveMediaIdentities,
+  selectNewMedia,
+  type MediaSnapshot,
+} from "./media-selection.js";
 import { safeFileStem } from "./paths.js";
 import { FlowStore } from "./store.js";
 import {
@@ -325,16 +332,26 @@ export class FlowAdapter {
             : request.outputs === 1 ? "Create exactly one image" : `Create exactly ${request.outputs} images`}: ${request.prompt}`,
         );
 
-        const baseline = await this.mediaLocator(page, request.mediaType).count();
+        const baselineSnapshots = await this.stableMediaBaseline(page, request.mediaType);
+        const baseline = baselineSnapshots.length;
+        const baselineMediaKeys = flattenMediaKeys(baselineSnapshots);
         await this.store.updateJob(job, "submitted", {
           baselineMediaCount: baseline,
+          baselineMediaKeys,
           flowProjectUrl: page.url(),
         });
         await this.clickGenerate(page, request.mediaType, baseline);
         await this.store.updateJob(job, "processing");
 
-        const completed = await this.waitForNewMedia(page, request.mediaType, baseline, request.timeoutSeconds);
-        if (!completed) return job;
+        const generated = await this.waitForNewMedia(
+          page,
+          request.mediaType,
+          baselineMediaKeys,
+          request.outputs,
+          request.timeoutSeconds,
+        );
+        if (!generated) return job;
+        await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
 
         if (request.mediaType === "video" && request.upscale !== "none") {
           await this.store.updateJob(job, "upscaling");
@@ -345,7 +362,7 @@ export class FlowAdapter {
 
         if (request.download) {
           await this.store.updateJob(job, "downloading");
-          await this.downloadLatest(page, job, request.outputs);
+          await this.downloadTracked(page, job);
         } else {
           await this.store.updateJob(job, "completed");
         }
@@ -368,9 +385,13 @@ export class FlowAdapter {
     if (["completed", "failed", "needs_attention"].includes(job.status)) return job;
     return this.browsers.runExclusive(job.accountId, async () => {
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
-      const baseline = job.baselineMediaCount ?? 0;
-      const ready = await this.waitForNewMedia(page, job.mediaType, baseline, timeoutSeconds);
-      if (ready && job.status === "processing") await this.store.updateJob(job, "ready");
+      if (!job.baselineMediaKeys) {
+        throw new FlowError("job_asset_identity_missing", "This job predates exact asset tracking and cannot be refreshed safely. Generate it again with the current MCP version.");
+      }
+      const generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds);
+      if (generated && job.status === "processing") {
+        await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
+      }
       return job;
     });
   }
@@ -392,7 +413,7 @@ export class FlowAdapter {
     return this.browsers.runExclusive(job.accountId, async () => {
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
       await this.store.updateJob(job, "downloading");
-      await this.downloadLatest(page, job, job.outputs);
+      await this.downloadTracked(page, job);
       return job;
     });
   }
@@ -884,7 +905,85 @@ export class FlowAdapter {
     return page.locator('img[src^="blob:"], img[src*="googleusercontent"], img[src*="ggpht"]');
   }
 
-  private async waitForNewMedia(page: Page, type: MediaType, baseline: number, timeoutSeconds: number): Promise<boolean> {
+  private async mediaSnapshots(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
+    return this.mediaLocator(page, type).evaluateAll((elements) => elements.map((element, index) => {
+      const keys: string[] = [];
+      const addUrl = (raw: string | null | undefined) => {
+        if (!raw) return;
+        keys.push(`url:${raw}`);
+        if (!raw.startsWith("blob:")) {
+          try {
+            const parsed = new URL(raw, window.location.href);
+            const originalParameterCount = [...parsed.searchParams].length;
+            for (const name of [...parsed.searchParams.keys()]) {
+              if (/^(?:x-goog-|signature$|sig$|expire$|expires$|token$|key-pair-id$)/i.test(name)) {
+                parsed.searchParams.delete(name);
+              }
+            }
+            parsed.hash = "";
+            parsed.searchParams.sort();
+            if (parsed.searchParams.size > 0 || originalParameterCount === 0) {
+              keys.push(`url-stable:${parsed.toString()}`);
+            }
+          } catch {
+            // The exact value above remains a usable identity.
+          }
+        }
+      };
+
+      if (element instanceof HTMLVideoElement) {
+        addUrl(element.currentSrc);
+        addUrl(element.getAttribute("src"));
+        addUrl(element.poster);
+        for (const source of element.querySelectorAll("source")) addUrl(source.src || source.getAttribute("src"));
+      } else if (element instanceof HTMLImageElement) {
+        addUrl(element.currentSrc);
+        addUrl(element.getAttribute("src"));
+      }
+
+      let current: Element | null = element;
+      for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
+        for (const attribute of ["data-asset-id", "data-generation-id", "data-media-id"]) {
+          const value = current.getAttribute(attribute);
+          if (value) keys.push(`${attribute}:${value}`);
+        }
+      }
+
+      if (!keys.length) {
+        const html = element as HTMLElement;
+        html.dataset.flowMcpAssetKey ||= `dom:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        keys.push(html.dataset.flowMcpAssetKey);
+      }
+
+      const ready = element instanceof HTMLVideoElement
+        ? element.readyState >= 1 && Number.isFinite(element.duration) && element.duration > 0
+        : element instanceof HTMLImageElement && element.complete && element.naturalWidth >= 256;
+      return { index, keys: [...new Set(keys)], ready };
+    }));
+  }
+
+  private async stableMediaBaseline(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
+    const deadline = Date.now() + 3_000;
+    let previous = "";
+    let stableRounds = 0;
+    let snapshots: MediaSnapshot[] = [];
+    while (Date.now() < deadline && stableRounds < 2) {
+      snapshots = await this.mediaSnapshots(page, type);
+      const signature = JSON.stringify(snapshots.map((snapshot) => snapshot.keys).sort());
+      stableRounds = signature === previous ? stableRounds + 1 : 0;
+      previous = signature;
+      if (stableRounds < 2) await page.waitForTimeout(400);
+    }
+    return snapshots;
+  }
+
+  private async waitForNewMedia(
+    page: Page,
+    type: MediaType,
+    baselineKeys: string[],
+    expectedCount: number,
+    timeoutSeconds: number,
+  ): Promise<MediaSnapshot[] | null> {
     const deadline = Date.now() + timeoutSeconds * 1_000;
     while (Date.now() < deadline) {
       const body = (await page.locator("body").innerText().catch(() => "")).slice(-10_000);
@@ -892,24 +991,22 @@ export class FlowAdapter {
         throw new FlowError("generation_failed", "Flow reported that the generation failed or requires attention.");
       }
       const media = this.mediaLocator(page, type);
-      const count = await media.count();
-      if (count > baseline) {
-        const ready = await media.last().evaluate((element) => {
-          if (element instanceof HTMLVideoElement) {
-            if (element.readyState < 1 && (element.networkState === 0 || element.networkState === 3)) {
-              element.preload = "metadata";
-              element.load();
-            }
-            return element.readyState >= 1 && Number.isFinite(element.duration) && element.duration > 0;
+      await media.evaluateAll((elements) => {
+        for (const element of elements) {
+          if (element instanceof HTMLVideoElement && element.readyState < 1 && (element.networkState === 0 || element.networkState === 3)) {
+            element.preload = "metadata";
+            element.load();
           }
-          if (element instanceof HTMLImageElement) return element.complete && element.naturalWidth >= 256;
-          return false;
-        }).catch(() => false);
-        if (ready) return true;
+        }
+      }).catch(() => undefined);
+      const candidates = selectNewMedia(await this.mediaSnapshots(page, type), baselineKeys);
+      const ready = candidates.filter((candidate) => candidate.ready);
+      if (ready.length >= expectedCount) {
+        return ready.slice(0, expectedCount);
       }
       await page.waitForTimeout(2_000);
     }
-    return false;
+    return null;
   }
 
   private async openAssetMenu(page: Page, media: Locator): Promise<void> {
@@ -999,9 +1096,12 @@ export class FlowAdapter {
     timeoutSeconds: number,
   ): Promise<boolean> {
     const media = this.mediaLocator(page, "video");
-    const before = await media.count();
-    if (!before) throw new FlowError("unsupported_option", "No generated video is visible to upscale.");
-    const discovered = await this.readVideoDownloadOptions(page, media.last());
+    const before = await this.mediaSnapshots(page, "video");
+    const tracked = this.resolveTrackedMedia(before, job);
+    const targetSnapshot = tracked.at(-1);
+    if (!targetSnapshot) throw new FlowError("unsupported_option", "No generated video is visible to upscale.");
+    const target = media.nth(targetSnapshot.index);
+    const discovered = await this.readVideoDownloadOptions(page, target);
     const options = discovered
       .filter((option) => option.kind === "upscale" && option.available)
       .map((option) => option.id);
@@ -1016,31 +1116,50 @@ export class FlowAdapter {
     const downloadWait = page.waitForEvent("download", { timeout: timeoutSeconds * 1_000 })
       .then((download) => ({ kind: "download" as const, download }))
       .catch(() => ({ kind: "download_timeout" as const }));
-    const mediaWait = this.waitForNewMedia(page, "video", before, timeoutSeconds)
-      .then((ready) => ({ kind: "media" as const, ready }));
+    const mediaWait = this.waitForNewMedia(page, "video", flattenMediaKeys(before), 1, timeoutSeconds)
+      .then((generated) => ({ kind: "media" as const, generated }));
     await choice.click();
     const result = await Promise.race([downloadWait, mediaWait]);
     if (result.kind === "download") {
       await this.saveCapturedDownload(job, result.download, chosen);
       return true;
     }
-    const ready = result.kind === "media" ? result.ready : (await mediaWait).ready;
-    if (!ready) {
+    const generated = result.kind === "media" ? result.generated : (await mediaWait).generated;
+    if (!generated) {
       await this.store.updateJob(job, "processing");
+      return false;
     }
-    return ready;
+    await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
+    return true;
   }
 
-  private async downloadLatest(page: Page, job: FlowJob, count: number): Promise<void> {
+  private resolveTrackedMedia(snapshots: MediaSnapshot[], job: FlowJob): MediaSnapshot[] {
+    if (!job.generatedAssets?.length) {
+      throw new FlowError(
+        "job_asset_identity_missing",
+        "This job has no exact generated-asset identity. Refusing to guess from gallery order; generate it again with the current MCP version.",
+      );
+    }
+    const resolved = resolveMediaIdentities(snapshots, job.generatedAssets);
+    if (!resolved) {
+      throw new FlowError(
+        "generated_asset_not_found",
+        "Flow no longer exposes a unique match for this job's generated asset. Refusing to download a different gallery item.",
+      );
+    }
+    return resolved;
+  }
+
+  private async downloadTracked(page: Page, job: FlowJob): Promise<void> {
     await mkdir(job.outputDirectory, { recursive: true });
     const media = this.mediaLocator(page, job.mediaType);
-    const total = await media.count();
-    if (!total) throw new FlowError("download_failed", "No generated asset is visible to download.");
-    const assetCount = Math.max(1, Math.min(count, total));
+    const tracked = this.resolveTrackedMedia(await this.mediaSnapshots(page, job.mediaType), job);
+    const assetCount = tracked.length;
     const downloaded: string[] = [];
 
-    for (let offset = assetCount - 1; offset >= 0; offset -= 1) {
-      const target = media.nth(total - 1 - offset);
+    for (let offset = 0; offset < assetCount; offset += 1) {
+      const targetSnapshot = tracked[offset]!;
+      const target = media.nth(targetSnapshot.index);
       await this.openAssetMenu(page, target);
       const control = await firstVisible([
         page.locator('[role="menuitem"]').filter({ has: page.locator("i.google-symbols", { hasText: /^download$/ }) }),
@@ -1075,7 +1194,7 @@ export class FlowAdapter {
       const suggested = download.suggestedFilename();
       const extension = path.extname(suggested) || (job.mediaType === "video" ? ".mp4" : ".png");
       const stem = safeFileStem(job.fileName || job.prompt.slice(0, 60));
-      const suffix = assetCount > 1 ? `-${assetCount - offset}` : "";
+      const suffix = assetCount > 1 ? `-${offset + 1}` : "";
       const destination = path.join(job.outputDirectory, `${stem}-${job.id.slice(0, 8)}${suffix}${extension}`);
       await download.saveAs(destination);
       downloaded.push(destination);
