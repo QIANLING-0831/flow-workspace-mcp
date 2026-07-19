@@ -136,7 +136,7 @@ export class FlowStore {
           "login_required",
           "No verified connected Flow account is available.",
           [
-            "Call flow_connect_account to connect an account that exposes the Flow generation workspace.",
+            "Call flow_begin_account_connection, wait for the user's extension click, then call flow_complete_account_connection.",
             "Do not select an unverified account or substitute generic browser/computer-use automation.",
           ],
         );
@@ -144,7 +144,7 @@ export class FlowStore {
       throw new FlowError(
         "account_not_found",
         requested ? `Flow account '${requested}' is not configured.` : "No Flow account is configured.",
-        ["Call flow_connect_account with a new accountId; it automatically detects when Flow authentication completes."],
+        ["Call flow_begin_account_connection, wait for the user's extension click, then call flow_complete_account_connection with a new accountId."],
       );
     }
     return account;
@@ -158,7 +158,7 @@ export class FlowStore {
         "flow_access_unavailable",
         `Google account '${account.id}' is signed in, but its saved session does not expose the Flow generation workspace.`,
         [
-          "Use flow_connect_account to select a Google account that has Flow access.",
+          "Use flow_begin_account_connection and flow_complete_account_connection to select a Google account that has Flow access.",
           "Do not open, scroll, or automate the public Flow website with browser/computer-use tools.",
         ],
       );
@@ -167,7 +167,7 @@ export class FlowStore {
       "login_required",
       `Flow account '${account.id}' is not a verified connected session.`,
       [
-        `Call flow_connect_account with accountId '${account.id}' before generation.`,
+        `Use flow_begin_account_connection and flow_complete_account_connection with accountId '${account.id}' before generation.`,
         "Do not substitute browser/computer-use automation for the Google Flow MCP tools.",
       ],
     );

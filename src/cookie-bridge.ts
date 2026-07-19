@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { FlowError } from "./errors.js";
 import type { TransferredBrowserSession, TransferredCookie } from "./types.js";
@@ -56,6 +57,9 @@ export class CookieBridge {
   private port: number | undefined;
   private readonly waiters: Waiter[] = [];
   private queued: TransferredBrowserSession | undefined;
+  private armedUntil = 0;
+  private armedAt = 0;
+  private connectionId: string | undefined;
 
   constructor(private readonly candidatePorts: number[] = DEFAULT_PORTS) {}
 
@@ -82,13 +86,39 @@ export class CookieBridge {
     throw new FlowError("browser_error", `Flow login bridge could not bind localhost ports ${this.candidatePorts.join(", ")}.`);
   }
 
-  status(): { running: boolean; port?: number; waitingForBrowser: boolean; queuedSession: boolean } {
+  status(): { running: boolean; port?: number; waitingForBrowser: boolean; queuedSession: boolean; connectionRequestedAt?: string } {
+    const armed = this.armedUntil > Date.now();
     return {
       running: Boolean(this.server),
       ...(this.port ? { port: this.port } : {}),
-      waitingForBrowser: this.waiters.length > 0,
+      waitingForBrowser: this.waiters.length > 0 || armed,
       queuedSession: Boolean(this.queued && Date.now() - Date.parse(this.queued.receivedAt) <= SESSION_TTL_MS),
+      ...(armed && this.armedAt ? { connectionRequestedAt: new Date(this.armedAt).toISOString() } : {}),
     };
+  }
+
+  armForSession(timeoutSeconds = 300): ReturnType<CookieBridge["status"]> & { connectionId: string } {
+    this.armedAt = Date.now();
+    this.armedUntil = Date.now() + timeoutSeconds * 1_000;
+    this.connectionId = randomUUID();
+    return { ...this.status(), connectionId: this.connectionId };
+  }
+
+  assertSessionReady(connectionId: string): void {
+    if (!this.connectionId || connectionId !== this.connectionId) {
+      throw new FlowError(
+        "validation_error",
+        "The account connection token is missing, expired, or belongs to another MCP process.",
+        ["Restart with flow_begin_account_connection and use the connectionId it returns."],
+      );
+    }
+    if (!this.queued || Date.now() - Date.parse(this.queued.receivedAt) > SESSION_TTL_MS) {
+      throw new FlowError(
+        "login_required",
+        "Flow Login Bridge has not sent the browser session for this connection yet.",
+        ["Stop and tell the user to open Flow Login Bridge, click Connect Flow, wait for Session sent, and reply connected."],
+      );
+    }
   }
 
   async waitForSession(timeoutSeconds: number): Promise<TransferredBrowserSession> {
@@ -96,6 +126,9 @@ export class CookieBridge {
     if (this.queued && Date.now() - Date.parse(this.queued.receivedAt) <= SESSION_TTL_MS) {
       const session = this.queued;
       this.queued = undefined;
+      this.armedUntil = 0;
+      this.armedAt = 0;
+      this.connectionId = undefined;
       return session;
     }
     this.queued = undefined;
@@ -122,6 +155,9 @@ export class CookieBridge {
       clearTimeout(waiter.timer);
       waiter.reject(new FlowError("browser_error", "Flow login bridge stopped while waiting for the browser."));
     }
+    this.armedUntil = 0;
+    this.armedAt = 0;
+    this.connectionId = undefined;
     if (!this.server) return;
     const server = this.server;
     this.server = undefined;
@@ -163,7 +199,10 @@ export class CookieBridge {
         receivedAt: new Date().toISOString(),
       };
       const waiter = this.waiters.shift();
+      this.armedUntil = 0;
+      this.armedAt = 0;
       if (waiter) {
+        this.connectionId = undefined;
         clearTimeout(waiter.timer);
         waiter.resolve(session);
       } else {

@@ -28,7 +28,10 @@ async function findBridge() {
       return null;
     }
   }));
-  return results.find((entry) => entry?.status?.waitingForBrowser) || results.find(Boolean) || null;
+  const waiting = results
+    .filter((entry) => entry?.status?.waitingForBrowser)
+    .sort((left, right) => Date.parse(right.status.connectionRequestedAt || 0) - Date.parse(left.status.connectionRequestedAt || 0));
+  return waiting[0] || results.find(Boolean) || null;
 }
 
 async function googleCookies() {
@@ -47,6 +50,12 @@ async function initialize() {
   bridge = await findBridge();
   if (!bridge) {
     setStatus("Flow MCP is not running. Start it from your agent, then reopen this popup.", "error");
+    return;
+  }
+  if (bridge.status.queuedSession) {
+    setStatus("Session sent. Return to your agent and say “connected.”", "ready");
+    connectButton.textContent = "Session sent";
+    connectButton.disabled = true;
     return;
   }
   setStatus(
@@ -72,8 +81,8 @@ connectButton.addEventListener("click", async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Flow MCP rejected the browser session.");
-    setStatus("Connected. Choose the Google account in the Flow window.", "ready");
-    connectButton.textContent = "Connected";
+    setStatus("Session sent. Return to your agent and say “connected.” The account chooser opens next.", "ready");
+    connectButton.textContent = "Session sent";
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), "error");
     connectButton.disabled = false;

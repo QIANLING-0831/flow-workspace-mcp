@@ -51,10 +51,15 @@ try {
     const labelParts = rest.slice(0, rest.findIndex((value) => value.startsWith("--")) === -1
       ? rest.length
       : rest.findIndex((value) => value.startsWith("--")));
-    const waitForLoginSeconds = waitValue ? Number.parseInt(waitValue, 10) : 600;
+    const waitForAccountSelectionSeconds = waitValue ? Number.parseInt(waitValue, 10) : 600;
+    if (!cdpUrl) {
+      cookieBridge.armForSession(300);
+      console.log("USER ACTION: Open Flow Login Bridge in your normal signed-in Chromium and click Connect Flow. Then select the desired existing account in the temporary chooser.");
+    }
     console.log(await flow.connectAccount(id, labelParts.join(" ") || undefined, {
       browserMode: cdpUrl ? "attach_cdp" : "extension",
-      waitForLoginSeconds,
+      waitForBridgeSeconds: 60,
+      waitForAccountSelectionSeconds,
       ...(cdpUrl ? { cdpUrl } : {}),
     }));
   } else if (action === "inspect") {

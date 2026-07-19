@@ -2,6 +2,33 @@
 
 All notable changes to Google Flow MCP are documented here.
 
+## [0.2.0] - 2026-07-19
+
+### Added
+
+- Supported `npm run setup:antigravity` installer using Antigravity's official global stdio MCP config structure
+- Hard installer contract in `AGENTS.md` and a complete numbered first-run guide in `INSTALL.md`
+- `flow_help` for natural-language capability explanations and concrete request examples
+- `flow_begin_account_connection`, which returns extension instructions immediately and forces the agent to stop for user action
+- `flow_complete_account_connection`, which runs only after the extension session has been sent
+- Bridge arming so the extension targets the MCP instance that requested account connection when multiple local clients are running
+- Clean-install tests for config preservation, absolute stdio paths, scratch-directory refusal, and untouched browser configuration
+
+### Changed
+
+- Removed the blocking `flow_connect_account` tool to prevent agents from hiding a required extension click inside a five-minute tool call
+- Flow Login Bridge now tells the user to return to the agent after the session is sent, before the temporary account chooser step
+- Installer validation refuses modified tracked source and disposable Antigravity scratch clones
+- Installer runs `npm ci`, all 25 tests, package dry-run validation, and normal system-browser detection before changing MCP config
+
+### Installer rules
+
+- No source patches during installation
+- No `npx playwright install chromium`
+- No generated MCP schema files
+- No speculative browser flags or remote-debugging setup
+- No replacement of unrelated MCP config entries
+
 ## [0.1.1] - 2026-07-19
 
 ### Fixed
@@ -48,3 +75,4 @@ All notable changes to Google Flow MCP are documented here.
 
 [0.1.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.1.0
 [0.1.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.1.1
+[0.2.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.0

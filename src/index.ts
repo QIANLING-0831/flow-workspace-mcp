@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,10 +18,11 @@ const browsers = new BrowserManager(store);
 const cookieBridge = new CookieBridge();
 await cookieBridge.start();
 const flow = new FlowAdapter(store, browsers, cookieBridge);
+const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.url));
 
 const server = new McpServer({
   name: "flow-mcp",
-  version: "0.1.1",
+  version: "0.2.0",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 }, {
   instructions: FLOW_AGENT_INSTRUCTIONS,
@@ -66,6 +68,48 @@ const confirmCreditSpend = z
   .describe("Must be true. Confirms the user explicitly authorized this operation to consume Google Flow/AI credits.");
 
 server.registerTool(
+  "flow_help",
+  {
+    title: "What Can Google Flow MCP Do?",
+    description: "Call this when the user asks what Google Flow MCP can do, how to use it, or for example requests. Returns a concise multilingual-ready capability guide without opening a browser or spending credits.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      const accounts = await store.listAccounts();
+      return ok({
+        product: "Google Flow MCP",
+        summary: "Create Google Flow videos and images from natural-language requests, discover the exact options on the connected account, use real Flow upscaling, and download validated media into the user's project.",
+        capabilities: [
+          "Generate one or more videos with live Flow video models such as Omni Flash or available Veo variants",
+          "Generate or edit images with available Nano Banana variants",
+          "Use prompts in any language",
+          "Select live aspect ratios, output counts, and durations when Flow exposes them",
+          "Attach local image/video references, ingredients, or frames",
+          "Use Flow's available video upscale options such as 1080p or highest_available",
+          "Download media plus reproducibility manifests, hashes, and optional FFprobe metadata",
+          "Keep multiple Google Flow accounts in isolated local sessions",
+        ],
+        exampleRequests: [
+          "Create one 16:9 Omni Flash video of a glass jellyfish floating through a rainy neon city and save it in my project.",
+          "Generate a vertical 9:16 image with Nano Banana 2 using this reference image.",
+          "Inspect my Flow account and tell me which models, ratios, durations, output counts, and upscales are available.",
+          "Upscale the last generated video to the highest option my Flow account currently offers.",
+          "Download the finished clip into my Remotion public/generated/flow folder.",
+        ],
+        connectedAccountIds: accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id),
+        defaultAccountId: accounts.defaultAccountId,
+        ready: Boolean(accounts.defaultAccountId),
+        agentInstruction: "Answer the user in their language with relevant examples. For generation, call flow_list_accounts, flow_inspect_account, then the matching flow_generate_* tool; never operate the Flow website with generic browser tools.",
+      });
+    } catch (error) {
+      return failed(error);
+    }
+  },
+);
+
+server.registerTool(
   "flow_list_accounts",
   {
     title: "List Google Flow Accounts",
@@ -81,7 +125,7 @@ server.registerTool(
         connectedAccountIds: accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id),
         agentInstruction: accounts.defaultAccountId
           ? `Use account '${accounts.defaultAccountId}' unless the user explicitly chose another connected account. Next call flow_inspect_account; never open Flow with browser/computer-use tools.`
-          : "No verified default account exists. Call flow_connect_account; never open Flow with browser/computer-use tools.",
+          : "No verified default account exists. Call flow_begin_account_connection, STOP and tell the user to click Connect Flow in the extension, then wait for their reply before calling flow_complete_account_connection.",
       });
     } catch (error) {
       return failed(error);
@@ -107,30 +151,68 @@ server.registerTool(
 );
 
 server.registerTool(
-  "flow_connect_account",
+  "flow_begin_account_connection",
   {
-    title: "Connect a Google Flow Account",
-    description: `The exclusive MCP login path. Connects an account already signed into normal Chromium through Flow Login Bridge, verifies that the actual generation workspace—not the public landing page—is available, and makes the successful account the default. No password, 2FA, browser restart, or generic browser automation is needed. ${FLOW_TOOL_GUARD}`,
+    title: "Begin Google Flow Account Connection",
+    description: `FIRST CONNECTION STEP. Returns the exact user instructions and extension path immediately; it never blocks waiting for a click. After this response, STOP and tell the user to open Flow Login Bridge in their normal signed-in Chromium, click Connect Flow, and reply when the popup says Session sent. Do not call the completion tool until the user replies. ${FLOW_TOOL_GUARD}`,
     inputSchema: {
+      accountId: accountId.optional().describe("Optional intended local account ID, used only to make the returned instructions specific."),
+      label: z.string().max(100).optional().describe("Optional intended local label, used only in the returned connection plan."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ accountId: id, label }) => {
+    try {
+      const accounts = await store.listAccounts();
+      const connection = cookieBridge.armForSession(300);
+      const { connectionId, ...bridge } = connection;
+      return ok({
+        status: "USER_ACTION_REQUIRED",
+        accountId: id,
+        label,
+        connectionId,
+        bridge,
+        extensionDirectory,
+        userMessage: [
+          "Open your normal Chromium browser—the one where your Google accounts are already signed in.",
+          "Open the Flow Login Bridge extension.",
+          "Click Connect Flow.",
+          "Wait until the popup says: Session sent.",
+          "Return here and say: connected.",
+        ],
+        nextTool: "flow_complete_account_connection",
+        connectedAccountIds: accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id),
+        agentInstruction: "STOP NOW. Show userMessage to the user in their language and wait for their reply. Preserve connectionId, but do not call flow_complete_account_connection in this turn.",
+      });
+    } catch (error) {
+      return failed(error);
+    }
+  },
+);
+
+server.registerTool(
+  "flow_complete_account_connection",
+  {
+    title: "Complete Google Flow Account Connection",
+    description: `SECOND CONNECTION STEP. Call only after the user confirms they clicked Connect Flow and the extension popup says Session sent. Before calling, tell the user that a temporary Google chooser will open and they should click the desired existing account. Requires the begin-step connectionId and explicit user confirmation; if the session was not sent it fails immediately instead of blocking. ${FLOW_TOOL_GUARD}`,
+    inputSchema: {
+      connectionId: z.string().uuid().describe("Required token returned by flow_begin_account_connection. Never invent or reuse it."),
+      userConfirmedSessionSent: z.literal(true).describe("Must be true only after the user explicitly says the extension popup displayed Session sent."),
       accountId: accountId.optional().describe("Optional local ID. Omit for the simplest setup; a safe ID is created automatically."),
-      label: z.string().max(100).optional().describe("Optional local label. Omit to reuse the selected normal browser profile's name."),
-      browserMode: z.enum(["extension", "attach_cdp"]).default("extension").describe("Use extension for the simple no-password connection from normal Chromium. attach_cdp is an advanced troubleshooting mode."),
-      cdpUrl: z.string().url().optional().describe("Required for attach_cdp. Localhost CDP URL such as http://127.0.0.1:9222. Remote hosts are rejected."),
-      chooseGoogleAccount: z.boolean().default(true).describe("Shows Google's chooser populated with accounts already signed into the copied browser session. No credentials are requested. Set false to reuse the browser profile's currently active Google account immediately."),
-      waitForLoginSeconds: z.number().int().min(0).max(900).default(300).describe("How long to watch for the existing-account click and Flow readiness. No terminal confirmation is needed."),
+      label: z.string().max(100).optional().describe("Optional local label. Omit to use the transferred Chromium profile name."),
+      chooseGoogleAccount: z.boolean().default(true).describe("Keep true to show Google's chooser populated with the transferred existing accounts."),
+      waitForAccountSelectionSeconds: z.number().int().min(30).max(900).default(300).describe("Time for the user to click an existing account in the temporary Google chooser and for Flow to load."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
-  async ({ accountId: id, label, browserMode, cdpUrl, chooseGoogleAccount, waitForLoginSeconds }) => {
+  async ({ connectionId, accountId: id, label, chooseGoogleAccount, waitForAccountSelectionSeconds }) => {
     try {
-      if (browserMode === "attach_cdp" && !cdpUrl) {
-        throw new FlowError("validation_error", "cdpUrl is required when browserMode is attach_cdp.");
-      }
+      cookieBridge.assertSessionReady(connectionId);
       return ok(await flow.connectAccount(id, label, {
-        browserMode,
+        browserMode: "extension",
         chooseGoogleAccount,
-        waitForLoginSeconds,
-        ...(cdpUrl ? { cdpUrl } : {}),
+        waitForBridgeSeconds: 1,
+        waitForAccountSelectionSeconds,
       }));
     } catch (error) {
       return failed(error);

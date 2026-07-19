@@ -11,7 +11,7 @@
 
 Works with **OpenAI Codex**, **Google Antigravity**, and other local stdio MCP clients.
 
-[Features](#why-google-flow-mcp) · [Quick start](#quick-start) · [Connect an account](#connect-your-google-account) · [Clients](#connect-your-mcp-client) · [Tools](#mcp-tools) · [Security](#security)
+[Features](#why-google-flow-mcp) · [Install](INSTALL.md) · [Connect an account](#connect-your-google-account) · [Clients](#connect-your-mcp-client) · [Tools](#mcp-tools) · [Security](#security)
 
 </div>
 
@@ -20,6 +20,8 @@ Works with **OpenAI Codex**, **Google Antigravity**, and other local stdio MCP c
 Google Flow MCP is a local [Model Context Protocol](https://modelcontextprotocol.io/) server that lets an AI agent operate [Google Flow](https://labs.google/fx/tools/flow) through a user-owned Chromium session. It can discover the exact options available to each account, generate media with Flow subscription credits, wait for long-running jobs, use the upscale choices Flow actually offers, and save validated files directly into a project.
 
 It does **not** require a Google generation API key. Credits are consumed through the Flow website just as they are when the user operates Flow manually.
+
+> **Installing with an agent?** Tell it to read [AGENTS.md](AGENTS.md) and follow [INSTALL.md](INSTALL.md). The supported Antigravity command is `npm run setup:antigravity`. Installer agents must not modify source, install Playwright Chromium, generate tool schemas, or use an Antigravity scratch directory.
 
 ## Why Google Flow MCP
 
@@ -69,12 +71,12 @@ If Flow does not offer a requested model, ratio, duration, output count, or upsc
 
 ### Account connection without entering credentials again
 
-The bundled **Flow Login Bridge** extension reuses Google accounts already signed into the user's normal Chromium profile:
+The bundled **Flow Login Bridge** extension reuses Google accounts already signed into the user's normal Chromium profile. Connection is deliberately split into two MCP calls so the agent can explain each user action instead of disappearing into a long-running tool:
 
-1. The user clicks **Connect Flow** in the extension.
-2. Google displays the existing-account chooser in a temporary Flow window.
-3. The user clicks an account they already use.
-4. The temporary window closes after connection; future automation runs in an isolated persistent session.
+1. `flow_begin_account_connection` returns immediately and instructs the agent to stop and tell the user what to click.
+2. The user clicks **Connect Flow** in the extension and replies **connected** after it says **Session sent**.
+3. `flow_complete_account_connection` opens Google's existing-account chooser; the user clicks the desired account.
+4. The actual Flow workspace is verified, the temporary window closes, and future automation uses an isolated persistent session.
 
 No email entry, password entry, 2FA entry, cookie JSON, Chromium restart, or remote-debugging launch is required for the normal login path.
 
@@ -124,10 +126,10 @@ This prevents an agent from scrolling around Flow's marketing site when the sele
 git clone https://github.com/retrolyze52/google-flow-mcp.git
 cd google-flow-mcp
 npm ci
-npm run build
+npm run check
 ```
 
-Playwright controls the locally installed Chromium/Chrome executable; it does not require a separate bundled browser download. Set `FLOW_MCP_BROWSER_EXECUTABLE` to an absolute browser path only if auto-detection cannot find it.
+Playwright controls the locally installed Chromium/Chrome executable; it does not require a separate bundled browser download. **Do not run `npx playwright install chromium`.** Set `FLOW_MCP_BROWSER_EXECUTABLE` to an absolute browser path only if auto-detection cannot find a normal system browser. See the complete [installation guide](INSTALL.md).
 
 ## Connect your Google account
 
@@ -155,11 +157,13 @@ Ask the agent:
 
 > Connect my Google Flow account as `personal`.
 
-The agent calls `flow_connect_account` and waits. While it is waiting:
+The correct interaction is:
 
-1. Open **Flow Login Bridge** in the already-running normal browser.
-2. Click **Connect Flow**.
-3. Click one of the Google accounts shown in the temporary chooser.
+1. The agent calls `flow_begin_account_connection`, shows you its instructions, and stops.
+2. Open **Flow Login Bridge** in the already-running normal browser and click **Connect Flow**.
+3. When the popup says **Session sent**, return to the agent and reply **connected**.
+4. The agent tells you a temporary chooser will open and calls `flow_complete_account_connection`.
+5. Click one of the existing Google accounts shown in the temporary chooser.
 
 That is the complete normal login flow. Completion is detected automatically and the temporary Flow window closes.
 
@@ -207,31 +211,15 @@ Open a new Codex task after changing MCP configuration. This does not restart Ch
 
 ### Google Antigravity
 
-Antigravity 2.0, Antigravity IDE, and Antigravity CLI support custom MCP servers. Install the repository in a stable directory—not under Antigravity's `scratch` directory, which may be deleted automatically. A Windows example:
+Antigravity 2.0, Antigravity IDE, and Antigravity CLI support local stdio MCP servers. Clone into a stable directory—not Antigravity's disposable `scratch` directory—then run the supported installer:
 
 ```powershell
 git clone https://github.com/retrolyze52/google-flow-mcp.git "$env:LOCALAPPDATA\google-flow-mcp"
-npm ci --prefix "$env:LOCALAPPDATA\google-flow-mcp"
-npm run build --prefix "$env:LOCALAPPDATA\google-flow-mcp"
+Set-Location "$env:LOCALAPPDATA\google-flow-mcp"
+npm run setup:antigravity
 ```
 
-Open **MCP Servers → Manage MCP Servers → View raw config**, or edit the shared `~/.gemini/config/mcp_config.json`, and add the stable entrypoint:
-
-```json
-{
-  "mcpServers": {
-    "google-flow": {
-      "command": "node",
-      "args": ["C:\\Users\\YOUR_NAME\\AppData\\Local\\google-flow-mcp\\dist\\index.js"],
-      "env": {
-        "FLOW_MCP_HEADLESS": "0"
-      }
-    }
-  }
-}
-```
-
-Then open **Settings → Customizations → Installed MCP Servers** and click **Refresh** so Antigravity reloads the server instructions and tool schemas. This refresh does not restart Chromium or lose connected Flow accounts. In Antigravity CLI, use `/mcp` to inspect the server and its tools. See Google's [Antigravity MCP configuration guide](https://codelabs.developers.google.com/google-workspace-mcp-antigravity).
+The installer enforces a clean source tree, runs all checks, detects a normal browser, preserves unrelated MCP servers, backs up the existing config, and writes the official `~/.gemini/config/mcp_config.json` stdio structure with absolute `command`, `args`, and `cwd` paths. Then open **Settings → Customizations → Installed MCP Servers** and click **Refresh**. Antigravity discovers schemas automatically; do not generate them. This refresh does not restart Chromium or lose connected Flow accounts. See [INSTALL.md](INSTALL.md) and Google's official [Antigravity MCP documentation](https://antigravity.google/docs/mcp).
 
 ### Other stdio MCP clients
 
@@ -260,13 +248,15 @@ Once the account is connected, users can speak normally:
 
 The expected agent workflow is:
 
-1. `flow_list_accounts`
-2. `flow_connect_account` when necessary
-3. `flow_inspect_account` immediately before generation
-4. `flow_generate_video` or `flow_generate_image` after explicit authorization
-5. `flow_job_status` for long-running work
-6. `flow_upscale_video` when requested
-7. `flow_download_job` for a ready asset that has not yet been downloaded
+1. `flow_help` when the user asks what the MCP can do
+2. `flow_list_accounts`
+3. `flow_begin_account_connection`, user instructions, and a hard stop when connection is needed
+4. `flow_complete_account_connection` only after the user confirms the extension click
+5. `flow_inspect_account` immediately before generation
+6. `flow_generate_video` or `flow_generate_image` after explicit authorization
+7. `flow_job_status` for long-running work
+8. `flow_upscale_video` when requested
+9. `flow_download_job` for a ready asset that has not yet been downloaded
 
 `flow_list_accounts` returns `connectionStatus`, `connectedAccountIds`, `defaultAccountId`, and an explicit next action. After a successful connection, that account automatically becomes the verified default. Generation and inspection calls may omit `accountId` to use it; provide an ID only when the user deliberately selects another connected account.
 
@@ -306,9 +296,11 @@ The MCP never invents `4x`, silently downgrades a request, or substitutes an unr
 
 | Tool | Purpose | Spends credits |
 | --- | --- | ---: |
+| `flow_help` | Explain capabilities and concrete user request examples | No |
 | `flow_list_accounts` | List locally configured account profiles | No |
 | `flow_login_bridge_status` | Check the localhost login bridge | No |
-| `flow_connect_account` | Connect an existing Chromium Google session | No |
+| `flow_begin_account_connection` | Return exact extension instructions immediately, then stop | No |
+| `flow_complete_account_connection` | Consume the user-sent session and verify Flow access | No |
 | `flow_inspect_account` | Return the live normalized capability map | No |
 | `flow_generate_video` | Generate, optionally upscale, and download video | Yes |
 | `flow_generate_image` | Generate/edit and download an image | Potentially |
@@ -320,9 +312,9 @@ Every tool includes MCP-visible parameter descriptions so the agent knows how to
 
 ### If an agent opens or scrolls the public Flow website
 
-That behavior is not a Flow MCP generation. Check the agent's tool trace: it must contain `flow_generate_video` or `flow_generate_image` and the response must contain a job ID. Version 0.1.1 and newer explicitly prohibit browser-tool fallback at the server, tool, and response levels. Refresh or restart the MCP client after upgrading so it reloads the current server instructions and tool schemas.
+That behavior is not a Flow MCP generation. Check the agent's tool trace: it must contain `flow_generate_video` or `flow_generate_image` and the response must contain a job ID. Version 0.2.0 adds a deterministic installer and non-blocking account onboarding in addition to the browser-fallback guard. Refresh or restart the MCP client after upgrading so it reloads the current server instructions and tool schemas.
 
-If the MCP itself returns `flow_access_unavailable`, the selected Google identity is signed in but did not reach the Flow workspace. Run `flow_connect_account` and select another account that has Flow access. Do not browse or scroll the landing page.
+If the MCP itself returns `flow_access_unavailable`, the selected Google identity is signed in but did not reach the Flow workspace. Restart the begin/complete connection workflow and select another account that has Flow access. Do not browse or scroll the landing page.
 
 ## Runtime data and diagnostics
 

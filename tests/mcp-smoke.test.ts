@@ -31,10 +31,12 @@ test("MCP server exposes the intended Flow tools", async (context) => {
   assert.deepEqual(
     listed.tools.map((tool) => tool.name).sort(),
     [
-      "flow_connect_account",
+      "flow_begin_account_connection",
+      "flow_complete_account_connection",
       "flow_download_job",
       "flow_generate_image",
       "flow_generate_video",
+      "flow_help",
       "flow_inspect_account",
       "flow_job_status",
       "flow_list_accounts",
@@ -49,4 +51,21 @@ test("MCP server exposes the intended Flow tools", async (context) => {
   assert.equal(accounts.isError, undefined);
   assert.match((accounts.content[0] as { type: "text"; text: string }).text, /"accounts": \[\]/);
   assert.match((accounts.content[0] as { type: "text"; text: string }).text, /No verified default account exists/);
+  const help = await client.callTool({ name: "flow_help", arguments: {} });
+  assert.equal(help.isError, undefined);
+  assert.match((help.content[0] as { type: "text"; text: string }).text, /Create Google Flow videos and images/);
+  assert.match((help.content[0] as { type: "text"; text: string }).text, /exampleRequests/);
+  const begin = await client.callTool({ name: "flow_begin_account_connection", arguments: { accountId: "personal" } });
+  assert.equal(begin.isError, undefined);
+  const beginText = (begin.content[0] as { type: "text"; text: string }).text;
+  assert.match(beginText, /USER_ACTION_REQUIRED/);
+  assert.match(beginText, /STOP NOW/);
+  assert.match(beginText, /flow_complete_account_connection/);
+  const connectionId = (JSON.parse(beginText) as { connectionId: string }).connectionId;
+  const prematureComplete = await client.callTool({
+    name: "flow_complete_account_connection",
+    arguments: { connectionId, userConfirmedSessionSent: true, accountId: "personal" },
+  });
+  assert.equal(prematureComplete.isError, true);
+  assert.match((prematureComplete.content[0] as { type: "text"; text: string }).text, /has not sent the browser session/);
 });

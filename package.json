@@ -1,6 +1,6 @@
 {
   "name": "google-flow-mcp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "MCP server for Google Flow video and image generation with live capability discovery, multi-account Chromium login, upscaling, and validated local downloads—no generation API key.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,10 @@
     "dist",
     "extension",
     "scripts/install-extension.ps1",
+    "scripts/setup-antigravity.mjs",
     "README.md",
+    "INSTALL.md",
+    "AGENTS.md",
     "SECURITY.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
@@ -32,7 +35,8 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "account": "tsx src/cli.ts account",
-    "install-extension": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-extension.ps1"
+    "install-extension": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-extension.ps1",
+    "setup:antigravity": "node scripts/setup-antigravity.mjs"
   },
   "keywords": [
     "mcp",

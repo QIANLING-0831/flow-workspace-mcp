@@ -112,12 +112,14 @@ export class FlowAdapter {
       browserMode?: "extension" | "attach_cdp";
       cdpUrl?: string;
       chooseGoogleAccount?: boolean;
-      waitForLoginSeconds?: number;
+      waitForBridgeSeconds?: number;
+      waitForAccountSelectionSeconds?: number;
     } = {},
   ): Promise<string> {
     const attached = options.browserMode === "attach_cdp";
-    const waitSeconds = options.waitForLoginSeconds ?? 300;
-    const transferred = attached ? undefined : await this.cookieBridge.waitForSession(waitSeconds);
+    const bridgeWaitSeconds = options.waitForBridgeSeconds ?? 15;
+    const selectionWaitSeconds = options.waitForAccountSelectionSeconds ?? 300;
+    const transferred = attached ? undefined : await this.cookieBridge.waitForSession(bridgeWaitSeconds);
     const id = accountId ?? await this.store.availableAccountId(transferred?.profile || "flow-account");
     const account = await this.store.ensureAccount(id, label ?? transferred?.profile, {
       browserMode: attached ? "attach_cdp" : "extension",
@@ -137,7 +139,7 @@ export class FlowAdapter {
         : FLOW_URL;
       await page.goto(startUrl, { waitUntil: "domcontentloaded" });
       await this.store.touchAccount(account.id);
-      const deadline = Date.now() + waitSeconds * 1_000;
+      const deadline = Date.now() + selectionWaitSeconds * 1_000;
       let chooserCompleted = !options.chooseGoogleAccount;
       let access = chooserCompleted
         ? await this.pageAccessState(page)
@@ -165,19 +167,19 @@ export class FlowAdapter {
           "flow_access_unavailable",
           message,
           [
-            "Call flow_connect_account again and select an account that has Google Flow access.",
+            "Restart with flow_begin_account_connection, wait for the user's extension click, then call flow_complete_account_connection for an account that has Flow access.",
             "Do not open, scroll, or automate the landing page with generic browser/computer-use tools.",
           ],
         );
       }
-      if (!access.workspaceAvailable && waitSeconds > 0) {
-        const message = `The existing Google session received from Chromium was not accepted by Flow within ${waitSeconds} seconds.`;
+      if (!access.workspaceAvailable && selectionWaitSeconds > 0) {
+        const message = `The existing Google session received from Chromium was not accepted by Flow within ${selectionWaitSeconds} seconds.`;
         await this.store.markAccountNeedsReconnect(account.id, message);
         if (!attached) await this.browsers.reset(account.id);
         throw new FlowError(
           "login_required",
           message,
-          ["Choose one of the accounts already shown in the account chooser, then call flow_connect_account again."],
+          ["Restart with flow_begin_account_connection and follow its user-confirmed two-step workflow."],
         );
       }
       const currentUrl = page.url();
@@ -224,8 +226,8 @@ export class FlowAdapter {
           workspaceAvailable: false,
           pageKind: access.pageKind,
           agentInstruction: access.signedIn
-            ? "Stop. This Google account does not expose the Flow generation workspace. Call flow_connect_account for another account; never browse or scroll the public Flow page."
-            : "Stop. Call flow_connect_account for this account; never use generic browser automation to log in or operate Flow.",
+            ? "Stop. This Google account does not expose the Flow generation workspace. Restart the begin/complete account connection workflow for another account; never browse or scroll the public Flow page."
+            : "Stop. Restart the begin/complete account connection workflow; never use generic browser automation to log in or operate Flow.",
           language: await page.locator("html").getAttribute("lang").then((value) => value || "unknown").catch(() => "unknown"),
           visibleModels: [],
           visibleAspectRatios: [],
@@ -411,7 +413,7 @@ export class FlowAdapter {
           "login_required",
           `Google Flow account '${accountId}' is not signed in.`,
           [
-            `Call flow_connect_account with accountId '${accountId}'; it will detect completion automatically.`,
+            `Call flow_begin_account_connection, tell the user to click Connect Flow in the extension, then call flow_complete_account_connection with accountId '${accountId}'.`,
             "Never substitute generic browser/computer-use automation for the MCP login or generation tools.",
           ],
         );
@@ -423,7 +425,7 @@ export class FlowAdapter {
           "flow_access_unavailable",
           message,
           [
-            "Call flow_connect_account and select an account that has Flow access.",
+            "Restart the flow_begin_account_connection and flow_complete_account_connection workflow and select an account that has Flow access.",
             "Do not open, scroll, click, or automate the public Flow page with browser/computer-use tools.",
           ],
         );
@@ -524,7 +526,7 @@ export class FlowAdapter {
       throw new FlowError(
         "ui_changed",
         "Could not find a Flow project or the New project control.",
-        ["Open the account with flow_connect_account, create or open a project, then retry."],
+        ["Reconnect with flow_begin_account_connection and flow_complete_account_connection, then retry."],
       );
     }
     await create.click();
