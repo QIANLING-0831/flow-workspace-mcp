@@ -81,6 +81,10 @@ export class FlowStore {
           found.cdpUrl = cdpUrl;
           changed = true;
         }
+        if (options.browserExecutablePath && found.browserExecutablePath !== options.browserExecutablePath) {
+          found.browserExecutablePath = options.browserExecutablePath;
+          changed = true;
+        }
         if (changed) await atomicWriteJson(this.accountsFile, file);
         return found;
       }
@@ -91,6 +95,7 @@ export class FlowStore {
         createdAt: new Date().toISOString(),
         browserMode: options.browserMode ?? "managed",
         ...(cdpUrl ? { cdpUrl } : {}),
+        ...(options.browserExecutablePath ? { browserExecutablePath: options.browserExecutablePath } : {}),
       };
       file.accounts.push(account);
       if (!file.defaultAccountId) file.defaultAccountId = id;
@@ -98,6 +103,17 @@ export class FlowStore {
       await mkdir(this.profileDir(id), { recursive: true });
       return account;
     });
+  }
+
+  async availableAccountId(base: string): Promise<string> {
+    const normalized = base.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "flow";
+    const file = await this.listAccounts();
+    if (!file.accounts.some((account) => account.id === normalized)) return normalized;
+    for (let suffix = 2; suffix < 10_000; suffix += 1) {
+      const candidate = `${normalized.slice(0, 47 - String(suffix).length)}-${suffix}`;
+      if (!file.accounts.some((account) => account.id === candidate)) return candidate;
+    }
+    throw new FlowError("internal_error", "Could not allocate a local Flow session ID.");
   }
 
   async requireAccount(accountId?: string): Promise<AccountRecord> {

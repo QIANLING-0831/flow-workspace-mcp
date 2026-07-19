@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { BrowserManager, findBrowserExecutable } from "./browser-manager.js";
+import { CookieBridge } from "./cookie-bridge.js";
 import { errorText } from "./errors.js";
 import { FlowAdapter } from "./flow-adapter.js";
 import { FlowStore } from "./store.js";
@@ -36,7 +37,9 @@ if (group !== "account") usage();
 const store = new FlowStore();
 await store.initialize();
 const browsers = new BrowserManager(store);
-const flow = new FlowAdapter(store, browsers);
+const cookieBridge = new CookieBridge();
+await cookieBridge.start();
+const flow = new FlowAdapter(store, browsers, cookieBridge);
 
 try {
   if (action === "list") {
@@ -50,7 +53,7 @@ try {
       : rest.findIndex((value) => value.startsWith("--")));
     const waitForLoginSeconds = waitValue ? Number.parseInt(waitValue, 10) : 600;
     console.log(await flow.connectAccount(id, labelParts.join(" ") || undefined, {
-      browserMode: cdpUrl ? "attach_cdp" : "managed",
+      browserMode: cdpUrl ? "attach_cdp" : "extension",
       waitForLoginSeconds,
       ...(cdpUrl ? { cdpUrl } : {}),
     }));
@@ -65,4 +68,5 @@ try {
   process.exitCode = 1;
 } finally {
   await browsers.closeAll();
+  await cookieBridge.close();
 }

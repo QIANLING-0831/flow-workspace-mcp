@@ -2,6 +2,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { BrowserManager } from "./browser-manager.js";
+import { CookieBridge } from "./cookie-bridge.js";
 import { FlowError } from "./errors.js";
 import { probeMedia } from "./media.js";
 import { safeFileStem } from "./paths.js";
@@ -51,20 +52,37 @@ export class FlowAdapter {
   constructor(
     private readonly store: FlowStore,
     private readonly browsers: BrowserManager,
+    private readonly cookieBridge: CookieBridge,
   ) {}
 
   async connectAccount(
-    accountId: string,
+    accountId?: string,
     label?: string,
-    options: { browserMode?: "managed" | "attach_cdp"; cdpUrl?: string; waitForLoginSeconds?: number } = {},
+    options: {
+      browserMode?: "extension" | "attach_cdp";
+      cdpUrl?: string;
+      chooseGoogleAccount?: boolean;
+      waitForLoginSeconds?: number;
+    } = {},
   ): Promise<string> {
-    const account = await this.store.ensureAccount(accountId, label, options);
+    const attached = options.browserMode === "attach_cdp";
+    const waitSeconds = options.waitForLoginSeconds ?? 300;
+    const transferred = attached ? undefined : await this.cookieBridge.waitForSession(waitSeconds);
+    const id = accountId ?? await this.store.availableAccountId(transferred?.profile || "flow-account");
+    const account = await this.store.ensureAccount(id, label ?? transferred?.profile, {
+      browserMode: attached ? "attach_cdp" : "extension",
+      ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
+    });
     return this.browsers.runExclusive(account.id, async () => {
       await this.browsers.reset(account.id);
-      const page = await this.browsers.pageFor(account.id);
-      await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
+      const page = transferred
+        ? await this.browsers.importCookies(account.id, transferred.cookies)
+        : await this.browsers.pageFor(account.id);
+      const startUrl = options.chooseGoogleAccount
+        ? `https://accounts.google.com/AccountChooser?continue=${encodeURIComponent(FLOW_URL)}`
+        : FLOW_URL;
+      await page.goto(startUrl, { waitUntil: "domcontentloaded" });
       await this.store.touchAccount(account.id);
-      const waitSeconds = options.waitForLoginSeconds ?? 600;
       const deadline = Date.now() + waitSeconds * 1_000;
       let signedIn = await this.isSignedIn(page);
       while (!signedIn && Date.now() < deadline) {
@@ -74,19 +92,19 @@ export class FlowAdapter {
       if (!signedIn && waitSeconds > 0) {
         throw new FlowError(
           "login_required",
-          `Google Flow connection for '${account.id}' was not completed within ${waitSeconds} seconds. The browser remains available in the running MCP session.`,
-          ["Finish signing in, then call flow_inspect_account or flow_connect_account again."],
+          `The existing Google session received from Chromium was not accepted by Flow within ${waitSeconds} seconds.`,
+          ["Choose one of the accounts already shown in the account chooser, then call flow_connect_account again."],
         );
       }
       return [
         `${signedIn ? "Connected" : "Opened"} Google Flow account '${account.id}' (${account.label}).`,
         account.browserMode === "attach_cdp"
           ? `Attached to Chromium CDP: ${account.cdpUrl}`
-          : `Managed Chromium profile: ${this.store.profileDir(account.id)}`,
+          : `Connected through Flow Login Bridge (${transferred?.cookies.length ?? 0} Google session cookies transferred locally).`,
         `Current URL: ${page.url()}`,
         signedIn
           ? "The session is signed in and ready. No terminal confirmation is required."
-          : "The Chromium window is open for troubleshooting; call this tool again after sign-in.",
+          : "The account chooser contains the accounts already signed into the normal browser; no credentials need to be entered.",
       ].join("\n");
     });
   }
@@ -253,7 +271,11 @@ export class FlowAdapter {
     const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 8_000);
     if (LOGIN_TEXT.test(body)) return false;
     if (await firstVisible([this.promptLocator(page)])) return true;
-    return /new project|my projects|credits|scenebuilder/i.test(body);
+    const accountControl = await firstVisible([
+      page.locator('button[aria-label*="Google Account" i], a[aria-label*="Google Account" i]'),
+      page.locator('img[alt*="profile" i], img[alt*="account" i]'),
+    ]);
+    return Boolean(accountControl && /new project|my projects|scenebuilder/i.test(body));
   }
 
   private promptLocator(page: Page): Locator {

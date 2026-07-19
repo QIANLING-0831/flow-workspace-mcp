@@ -19,13 +19,34 @@ export interface AccountRecord {
   label: string;
   createdAt: string;
   lastOpenedAt?: string;
-  browserMode?: "managed" | "attach_cdp";
+  browserMode?: "managed" | "extension" | "attach_cdp";
   cdpUrl?: string;
+  browserExecutablePath?: string;
 }
 
 export interface AccountOptions {
-  browserMode?: "managed" | "attach_cdp";
+  browserMode?: "managed" | "extension" | "attach_cdp";
   cdpUrl?: string;
+  browserExecutablePath?: string;
+}
+
+export interface TransferredCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path?: string;
+  hostOnly?: boolean;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: "no_restriction" | "lax" | "strict" | "unspecified";
+  expirationDate?: number;
+}
+
+export interface TransferredBrowserSession {
+  cookies: TransferredCookie[];
+  browser?: string;
+  profile?: string;
+  receivedAt: string;
 }
 
 export interface AccountsFile {

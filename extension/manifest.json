@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Flow Login Bridge",
+  "version": "0.1.0",
+  "description": "Connect Google accounts already signed into Chromium to your local Flow MCP server.",
+  "permissions": ["cookies"],
+  "host_permissions": [
+    "https://google.com/*",
+    "https://*.google.com/*",
+    "https://labs.google/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "Connect Google Flow",
+    "default_popup": "popup.html"
+  }
+}

@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { BrowserManager } from "./browser-manager.js";
+import { CookieBridge } from "./cookie-bridge.js";
 import { errorText, FlowError } from "./errors.js";
 import { FlowAdapter } from "./flow-adapter.js";
 import { assertExistingFiles, requireAbsoluteDirectory } from "./paths.js";
@@ -12,7 +13,9 @@ import type { FlowJob, GenerationRequest, UiCapabilities } from "./types.js";
 const store = new FlowStore();
 await store.initialize();
 const browsers = new BrowserManager(store);
-const flow = new FlowAdapter(store, browsers);
+const cookieBridge = new CookieBridge();
+await cookieBridge.start();
+const flow = new FlowAdapter(store, browsers, cookieBridge);
 
 const server = new McpServer({
   name: "flow-mcp",
@@ -74,26 +77,45 @@ server.registerTool(
 );
 
 server.registerTool(
+  "flow_login_bridge_status",
+  {
+    title: "Check Flow Login Bridge",
+    description: "Reports whether the localhost Flow Login Bridge is running and waiting for the Chromium extension. This read-only diagnostic never reads cookies, opens a browser, contacts Google, or changes account state.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      return ok(cookieBridge.status());
+    } catch (error) {
+      return failed(error);
+    }
+  },
+);
+
+server.registerTool(
   "flow_connect_account",
   {
     title: "Connect a Google Flow Account",
-    description: "Creates or opens a persistent Chromium profile, navigates to Google Flow, and automatically detects when authentication is complete—no terminal confirmation is needed. It can alternatively attach to an explicitly configured localhost Chromium CDP endpoint to reuse that browser's signed-in session. Credentials and cookies are never requested by the MCP tool.",
+    description: "Connects Google Flow using accounts already signed into the user's normal Chromium profile. The user clicks Connect Flow in the bridge extension; session cookies move only over localhost into an isolated Flow session, then Google shows the existing-account chooser. No email, password, 2FA, cookie JSON, browser restart, debug flag, or main-browser tab management is required. Call again to connect another existing Google account.",
     inputSchema: {
-      accountId,
-      label: z.string().max(100).optional().describe("Human-readable label used only in local metadata, e.g. 'Personal Google Pro'."),
-      browserMode: z.enum(["managed", "attach_cdp"]).default("managed").describe("managed launches detected Chromium with an isolated persistent profile; attach_cdp reuses a Chromium instance the user explicitly started with a localhost remote-debugging endpoint."),
+      accountId: accountId.optional().describe("Optional local ID. Omit for the simplest setup; a safe ID is created automatically."),
+      label: z.string().max(100).optional().describe("Optional local label. Omit to reuse the selected normal browser profile's name."),
+      browserMode: z.enum(["extension", "attach_cdp"]).default("extension").describe("Use extension for the simple no-password connection from normal Chromium. attach_cdp is an advanced troubleshooting mode."),
       cdpUrl: z.string().url().optional().describe("Required for attach_cdp. Localhost CDP URL such as http://127.0.0.1:9222. Remote hosts are rejected."),
-      waitForLoginSeconds: z.number().int().min(0).max(900).default(600).describe("How long to automatically watch for successful Flow login. Use 0 to open/attach and return immediately for troubleshooting."),
+      chooseGoogleAccount: z.boolean().default(true).describe("Shows Google's chooser populated with accounts already signed into the copied browser session. No credentials are requested. Set false to reuse the browser profile's currently active Google account immediately."),
+      waitForLoginSeconds: z.number().int().min(0).max(900).default(300).describe("How long to watch for the existing-account click and Flow readiness. No terminal confirmation is needed."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
-  async ({ accountId: id, label, browserMode, cdpUrl, waitForLoginSeconds }) => {
+  async ({ accountId: id, label, browserMode, cdpUrl, chooseGoogleAccount, waitForLoginSeconds }) => {
     try {
       if (browserMode === "attach_cdp" && !cdpUrl) {
         throw new FlowError("validation_error", "cdpUrl is required when browserMode is attach_cdp.");
       }
       return ok(await flow.connectAccount(id, label, {
         browserMode,
+        chooseGoogleAccount,
         waitForLoginSeconds,
         ...(cdpUrl ? { cdpUrl } : {}),
       }));
@@ -274,6 +296,7 @@ server.registerTool(
 
 const shutdown = async (): Promise<void> => {
   await browsers.closeAll();
+  await cookieBridge.close();
   process.exit(0);
 };
 process.once("SIGINT", () => void shutdown());

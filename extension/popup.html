@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Flow Login Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">F</div>
+      <div>
+        <h1>Connect Google Flow</h1>
+        <p id="description">Use the Google accounts already signed into this browser.</p>
+      </div>
+      <div id="status" class="status" role="status">Checking Flow MCP…</div>
+      <button id="connect" type="button" disabled>Connect Flow</button>
+      <p class="privacy">Sent only to Flow MCP on this computer. Passwords and 2FA are never accessed.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,14 +1,18 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { FlowError } from "./errors.js";
 import { FlowStore } from "./store.js";
+import { FLOW_URL } from "./types.js";
+import type { TransferredCookie } from "./types.js";
 
 interface AccountBrowser {
   context: BrowserContext;
   page: Page;
-  managed: boolean;
+  close: () => Promise<void>;
 }
 
 function systemChromiumCandidates(): string[] {
@@ -48,6 +52,45 @@ export function findBrowserExecutable(): string | undefined {
   return systemChromiumCandidates().find(existsSync);
 }
 
+async function reserveLocalPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Could not reserve a local CDP port.")));
+        return;
+      }
+      const port = address.port;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+async function waitForCdp(endpoint: string, process: ChildProcess, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (process.exitCode !== null) {
+      throw new Error(`Chromium exited before CDP was ready (exit code ${process.exitCode}).`);
+    }
+    try {
+      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1_000) });
+      if (response.ok) return;
+    } catch {
+      // Browser is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Chromium did not expose CDP at ${endpoint} within ${timeoutMs / 1_000} seconds.`);
+}
+
+async function closeManagedBrowser(browser: Browser, process: ChildProcess): Promise<void> {
+  await browser.close().catch(() => undefined);
+  if (process.exitCode === null && !process.killed) process.kill();
+}
+
 export class BrowserManager {
   private readonly browsers = new Map<string, AccountBrowser>();
   private readonly queues = new Map<string, Promise<void>>();
@@ -59,7 +102,6 @@ export class BrowserManager {
     if (existing && !existing.page.isClosed()) return existing.page;
 
     const account = await this.store.requireAccount(accountId);
-    const headless = process.env.FLOW_MCP_HEADLESS === "1";
     try {
       if (account.browserMode === "attach_cdp") {
         if (!account.cdpUrl) {
@@ -70,37 +112,93 @@ export class BrowserManager {
         if (!context) throw new FlowError("browser_error", `No browser context was exposed at ${account.cdpUrl}.`);
         const page = context.pages().find((candidate) => candidate.url().startsWith("https://labs.google/"))
           ?? (await context.newPage());
-        page.setDefaultTimeout(10_000);
-        page.setDefaultNavigationTimeout(45_000);
-        this.browsers.set(accountId, { context, page, managed: false });
+        this.preparePage(page);
+        this.browsers.set(accountId, { context, page, close: async () => undefined });
         return page;
       }
 
-      const executablePath = findBrowserExecutable();
-      const context = await chromium.launchPersistentContext(this.store.profileDir(accountId), {
-        ...(executablePath
-          ? { executablePath }
-          : { channel: process.env.FLOW_MCP_CHROME_CHANNEL || "chrome" }),
-        headless,
-        acceptDownloads: true,
-        viewport: null,
-        locale: "en-US",
+      const executablePath = account.browserExecutablePath ?? findBrowserExecutable();
+      if (!executablePath) {
+        throw new FlowError(
+          "browser_error",
+          "No Chromium or Google Chrome executable was detected.",
+          ["Set FLOW_MCP_BROWSER_EXECUTABLE to the browser executable's absolute path."],
+        );
+      }
+      const port = await reserveLocalPort();
+      const endpoint = `http://127.0.0.1:${port}`;
+      const args = [
+        `--remote-debugging-port=${port}`,
+        `--user-data-dir=${this.store.profileDir(accountId)}`,
+        "--profile-directory=Default",
+        "--no-first-run",
+        "--no-default-browser-check",
+        ...(process.env.FLOW_MCP_HEADLESS === "1" ? ["--headless=new"] : []),
+        `--app=${FLOW_URL}`,
+      ];
+      const processHandle = spawn(executablePath, args, {
+        stdio: "ignore",
+        windowsHide: false,
       });
-      const page = context.pages()[0] ?? (await context.newPage());
-      page.setDefaultTimeout(10_000);
-      page.setDefaultNavigationTimeout(45_000);
-      this.browsers.set(accountId, { context, page, managed: true });
+      let browser: Browser | undefined;
+      try {
+        await waitForCdp(endpoint, processHandle);
+        browser = await chromium.connectOverCDP(endpoint);
+      } catch (error) {
+        if (processHandle.exitCode === null && !processHandle.killed) processHandle.kill();
+        throw error;
+      }
+      const context = browser.contexts()[0];
+      if (!context) {
+        await closeManagedBrowser(browser, processHandle);
+        throw new FlowError("browser_error", "Managed Chromium started without a usable browser context.");
+      }
+      const page = context.pages().find((candidate) => candidate.url().startsWith("https://labs.google/"))
+        ?? context.pages()[0]
+        ?? (await context.newPage());
+      this.preparePage(page);
+      this.browsers.set(accountId, {
+        context,
+        page,
+        close: () => closeManagedBrowser(browser, processHandle),
+      });
       return page;
     } catch (error) {
+      if (error instanceof FlowError) throw error;
       throw new FlowError(
         "browser_error",
-        `Could not launch Chromium for Flow account '${accountId}': ${error instanceof Error ? error.message : String(error)}`,
+        `Could not connect Chromium for Flow account '${accountId}': ${error instanceof Error ? error.message : String(error)}`,
         [
           "Install Chromium/Chrome, or set FLOW_MCP_BROWSER_EXECUTABLE to its absolute executable path.",
-          "Close another browser process if it is already using this account's dedicated profile.",
+          "For attach_cdp, confirm the localhost /json/version endpoint is reachable.",
         ],
       );
     }
+  }
+
+  async importCookies(accountId: string, cookies: TransferredCookie[]): Promise<Page> {
+    const page = await this.pageFor(accountId);
+    const managed = this.browsers.get(accountId);
+    if (!managed) throw new FlowError("browser_error", `Browser context for '${accountId}' is unavailable.`);
+    await managed.context.clearCookies();
+    await managed.context.addCookies(cookies.map((cookie) => {
+      const common = {
+        name: cookie.name,
+        value: cookie.value,
+        secure: cookie.secure ?? true,
+        httpOnly: cookie.httpOnly ?? false,
+        sameSite: cookie.sameSite === "strict" ? "Strict" as const
+          : cookie.sameSite === "lax" ? "Lax" as const
+            : "None" as const,
+        ...(cookie.expirationDate && cookie.expirationDate > 0 ? { expires: cookie.expirationDate } : {}),
+      };
+      if (cookie.hostOnly) {
+        const host = cookie.domain.replace(/^\./, "");
+        return { ...common, url: `https://${host}${cookie.path || "/"}` };
+      }
+      return { ...common, domain: cookie.domain, path: cookie.path || "/" };
+    }));
+    return page;
   }
 
   async runExclusive<T>(accountId: string, operation: () => Promise<T>): Promise<T> {
@@ -124,15 +222,16 @@ export class BrowserManager {
     const existing = this.browsers.get(accountId);
     if (!existing) return;
     this.browsers.delete(accountId);
-    if (existing.managed) await existing.context.close();
+    await existing.close();
   }
 
   async closeAll(): Promise<void> {
-    await Promise.allSettled(
-      [...this.browsers.values()]
-        .filter(({ managed }) => managed)
-        .map(({ context }) => context.close()),
-    );
+    await Promise.allSettled([...this.browsers.values()].map(({ close }) => close()));
     this.browsers.clear();
+  }
+
+  private preparePage(page: Page): void {
+    page.setDefaultTimeout(10_000);
+    page.setDefaultNavigationTimeout(45_000);
   }
 }

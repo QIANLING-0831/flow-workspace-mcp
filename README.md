@@ -8,8 +8,9 @@ It uses no Google generation API key. Subscription credits are consumed through 
 
 ## Features
 
-- Separate persistent Chromium profile for every managed Google account.
-- One-click account connection that detects successful login automatically—no terminal confirmation step.
+- One-click Flow Login Bridge that reuses Google accounts already signed into normal Chromium.
+- Separate persistent Flow session for every selected Google account.
+- No email, password, 2FA, cookie JSON, browser restart, or terminal confirmation during account connection.
 - Optional localhost CDP attachment to reuse an explicitly debug-enabled Chromium session.
 - Per-account operation queue; different accounts can run independently.
 - Video and image generation with model, aspect ratio, duration, output count, and reference files.
@@ -26,6 +27,7 @@ It uses no Google generation API key. Subscription credits are consumed through 
 
 - Node.js 20 or newer.
 - Chromium or Google Chrome. Auto-detection prefers Chromium.
+- The bundled Flow Login Bridge extension, installed once in the normal browser.
 - A Google account with access to Flow in a supported region.
 - Optional: `ffprobe` on `PATH` for video resolution, codec, and duration validation.
 
@@ -40,9 +42,21 @@ npm run check
 
 Playwright controls your locally installed Chromium/Chrome executable, so a separate bundled browser download is not required. Set `FLOW_MCP_BROWSER_EXECUTABLE` only when auto-detection cannot find it.
 
+## One-time bridge installation
+
+The bridge extension is bundled in `extension/`. It only reads Google cookies after the user clicks **Connect Flow**, and sends them to the running MCP server over `127.0.0.1`. It cannot contact a remote server with those cookies and never reads passwords or 2FA codes.
+
+On Windows, run:
+
+```powershell
+npm run install-extension
+```
+
+This copies the extension folder path and opens Chromium's extension page. Enable **Developer mode**, choose **Load unpacked**, and paste the copied `extension` folder path. This one-time install does not restart Chromium. A published Chrome Web Store package can replace this unpacked-install step for end users.
+
 ## Connect one or more accounts
 
-Each managed account ID owns a different Chromium profile. The connection opens Flow and watches the page; after Google authentication succeeds it records the ready session and exits automatically. There is no “press Enter when done” step.
+Start account connection from an MCP agent with `flow_connect_account`, or from the CLI:
 
 ```powershell
 npm run account -- connect personal "Personal Google Pro"
@@ -50,7 +64,13 @@ npm run account -- connect studio "Studio Google account"
 npm run account -- list
 ```
 
-Chromium opens at Flow. Complete Google sign-in or account verification in that browser window; completion is detected automatically. This first authentication interaction cannot safely be replaced by storing or typing the user's Google password. Cookies remain in the account's dedicated profile, so subsequent generations require no login work.
+While the connection waits:
+
+1. Click **Flow Login Bridge** in the already-running normal Chromium window.
+2. Click **Connect Flow**.
+3. In the small Flow app window, click one of the Google accounts already signed into Chromium.
+
+That is the complete account-login flow. Do not enter an email, password, or 2FA code. The normal browser is not closed, restarted, debug-enabled, or modified. Completion is detected automatically, and the isolated Flow session is reused for future generations.
 
 Agents can provide the same onboarding with `flow_connect_account`; users do not need the CLI.
 
@@ -62,7 +82,7 @@ If Chromium was deliberately started with a localhost remote-debugging port, con
 npm run account -- connect personal "Main Chromium" --cdp http://127.0.0.1:9222
 ```
 
-This mode does not copy or decrypt browser cookies. `flow-mcp` only accepts localhost CDP endpoints and does not close attached browsers. A normally running browser without remote debugging cannot be attached retroactively; use managed mode for the simplest reliable setup.
+This advanced mode does not copy or decrypt browser cookies. `flow-mcp` only accepts localhost CDP endpoints and does not close attached browsers. Use the extension mode for normal setup.
 
 Default runtime data locations:
 
@@ -109,7 +129,7 @@ Restart the MCP client after changing its configuration.
 ## Agent workflow
 
 1. Call `flow_list_accounts` and select an account.
-2. If necessary, call `flow_connect_account`; it detects when the account is ready automatically.
+2. If necessary, tell the user to click the bridge extension, then call `flow_connect_account`; it detects the transfer and existing-account selection automatically.
 3. Optionally call `flow_inspect_account` to inspect current Flow UI capabilities.
 4. Call `flow_generate_video` or `flow_generate_image` with `confirmCreditSpend: true` only after the user explicitly requested generation.
 5. If a long generation returns `processing`, poll `flow_job_status`.
@@ -150,7 +170,7 @@ The server does not use local interpolation or an unrelated upscaler when Flow l
 
 ## Multiple accounts
 
-Use a stable local ID such as `personal`, `studio`, or `backup`. An account ID is not an email address and is safe to include in job manifests. Email addresses and Google credentials are never required by MCP tools.
+Call `flow_connect_account` again and click a different existing Google account to create another isolated Flow session. Use stable local IDs such as `personal`, `studio`, or `backup`; omit the ID to let the server create one. Email addresses and Google credentials are never required by MCP tools.
 
 Operations for one account are serialized to prevent two agents from changing the same Flow page simultaneously. Separate accounts use separate Chrome contexts and can progress independently.
 
@@ -159,7 +179,8 @@ Operations for one account are serialized to prevent two agents from changing th
 | Tool | Purpose | Spends credits |
 | --- | --- | --- |
 | `flow_list_accounts` | List local profiles | No |
-| `flow_connect_account` | Connect managed Chromium or an explicit localhost CDP session | No |
+| `flow_login_bridge_status` | Check whether the localhost bridge is running/waiting | No |
+| `flow_connect_account` | Import an existing Chromium Google session and choose an account | No |
 | `flow_inspect_account` | Inspect login/UI controls and save a screenshot | No |
 | `flow_generate_video` | Generate, optionally upscale, and download video | Yes |
 | `flow_generate_image` | Generate/edit and download image | Potentially |
@@ -186,7 +207,8 @@ On a `ui_changed` error, open the returned screenshot, confirm Flow's current wo
 - This is browser automation, not an official Flow API.
 - It can break when Google changes Flow's interface.
 - It does not bypass CAPTCHA, verification, quotas, regional availability, safety filters, or access controls.
-- A first Google authentication must be completed by the account owner unless an explicitly debug-enabled, already-signed-in Chromium session is attached. The project never copies cookies or automates passwords.
+- The bridge extension has powerful access to Google session cookies. Install only the copy shipped with this repository, review its small source, and never paste or transmit its data elsewhere.
+- A browser-session connection can expire or be revoked by Google; click Connect Flow again to refresh it from the normal browser.
 - Keep the browser headed for first-time authentication and troubleshooting.
 - Generated output, watermarks, credit costs, and model availability depend on the Google account, plan, region, and current Flow product behavior.
 - You are responsible for complying with Google's terms and policies.

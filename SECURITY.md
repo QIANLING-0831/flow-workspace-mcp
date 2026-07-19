@@ -2,7 +2,9 @@
 
 ## Account data
 
-`flow-mcp` never asks for or stores Google passwords. Each managed account uses an isolated Chromium user-data directory under the platform application-data directory. Cookies and other browser state stay in that directory and are not part of the repository. Optional CDP attachment is restricted to localhost endpoints.
+`flow-mcp` never asks for or stores Google passwords or 2FA codes. The Flow Login Bridge reads Google cookies only after a user click and transfers them over localhost to the running MCP process. Raw transfer payloads remain in memory and are never logged or written as JSON. Chromium persists the resulting isolated Flow session under the platform application-data directory. Optional CDP attachment is restricted to localhost endpoints.
+
+The localhost bridge rejects normal web origins, validates Google-only cookie domains, limits payload size, and listens only on `127.0.0.1`. Install only a reviewed copy of the bundled extension; any extension with cookie permission is security-sensitive.
 
 Do not commit a directory supplied through `FLOW_MCP_DATA_DIR`. Treat copied browser profiles as credentials.
 

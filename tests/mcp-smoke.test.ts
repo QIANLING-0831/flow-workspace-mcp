@@ -35,6 +35,7 @@ test("MCP server exposes the intended Flow tools", async (context) => {
       "flow_inspect_account",
       "flow_job_status",
       "flow_list_accounts",
+      "flow_login_bridge_status",
       "flow_upscale_video",
     ],
   );

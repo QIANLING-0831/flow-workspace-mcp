@@ -11,6 +11,8 @@
   },
   "files": [
     "dist",
+    "extension",
+    "scripts/install-extension.ps1",
     "README.md",
     "LICENSE"
   ],
@@ -25,7 +27,8 @@
     "check": "npm run typecheck && npm test",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "account": "tsx src/cli.ts account"
+    "account": "tsx src/cli.ts account",
+    "install-extension": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-extension.ps1"
   },
   "keywords": [
     "mcp",
