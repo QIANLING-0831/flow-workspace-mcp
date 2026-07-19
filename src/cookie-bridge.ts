@@ -13,7 +13,9 @@ interface Waiter {
 }
 
 function isExtensionOrigin(origin: string | undefined): boolean {
-  return Boolean(origin && /^chrome-extension:\/\/[a-p]{32}$/.test(origin));
+  // Chromium may omit Origin for extension requests granted explicit localhost
+  // host permission. Normal web-page fetches include their https/http origin.
+  return origin === undefined || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
 }
 
 function isGoogleDomain(domain: string): boolean {
@@ -133,8 +135,10 @@ export class CookieBridge {
       this.json(response, 403, { error: "extension_origin_required" });
       return;
     }
-    response.setHeader("Access-Control-Allow-Origin", origin!);
-    response.setHeader("Vary", "Origin");
+    if (origin) {
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+    }
     response.setHeader("Access-Control-Allow-Headers", "Content-Type");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     if (request.method === "OPTIONS") {

@@ -9,7 +9,13 @@ function setStatus(message, state = "") {
 }
 
 async function request(url, options = {}) {
-  return fetch(url, { ...options, signal: AbortSignal.timeout(1500), cache: "no-store" });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal, cache: "no-store" });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function findBridge() {

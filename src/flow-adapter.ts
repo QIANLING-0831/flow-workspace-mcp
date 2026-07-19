@@ -73,20 +73,29 @@ export class FlowAdapter {
       browserMode: attached ? "attach_cdp" : "extension",
       ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
     });
+    if (!attached) await this.store.setHeadlessAfterLogin(account.id, false);
     return this.browsers.runExclusive(account.id, async () => {
       await this.browsers.reset(account.id);
       const page = transferred
         ? await this.browsers.importCookies(account.id, transferred.cookies)
         : await this.browsers.pageFor(account.id);
       const startUrl = options.chooseGoogleAccount
-        ? `https://accounts.google.com/AccountChooser?continue=${encodeURIComponent(FLOW_URL)}`
+        // Google rejects labs.google as a direct AccountChooser continuation
+        // with HTTP 400. Use the supported Google Account destination, then
+        // navigate to Flow after the user selects an existing account.
+        ? `https://accounts.google.com/AccountChooser?continue=${encodeURIComponent("https://myaccount.google.com/")}`
         : FLOW_URL;
       await page.goto(startUrl, { waitUntil: "domcontentloaded" });
       await this.store.touchAccount(account.id);
       const deadline = Date.now() + waitSeconds * 1_000;
-      let signedIn = await this.isSignedIn(page);
+      let chooserCompleted = !options.chooseGoogleAccount;
+      let signedIn = chooserCompleted && await this.isSignedIn(page);
       while (!signedIn && Date.now() < deadline) {
         await page.waitForTimeout(1_000);
+        if (!chooserCompleted && /^https:\/\/myaccount\.google\.com(?:\/|$)/i.test(page.url())) {
+          chooserCompleted = true;
+          await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
+        }
         signedIn = await this.isSignedIn(page);
       }
       if (!signedIn && waitSeconds > 0) {
@@ -96,14 +105,21 @@ export class FlowAdapter {
           ["Choose one of the accounts already shown in the account chooser, then call flow_connect_account again."],
         );
       }
+      const currentUrl = page.url();
+      if (signedIn && !attached) {
+        await this.store.setHeadlessAfterLogin(account.id, true);
+        await this.browsers.reset(account.id);
+      }
       return [
         `${signedIn ? "Connected" : "Opened"} Google Flow account '${account.id}' (${account.label}).`,
         account.browserMode === "attach_cdp"
           ? `Attached to Chromium CDP: ${account.cdpUrl}`
           : `Connected through Flow Login Bridge (${transferred?.cookies.length ?? 0} Google session cookies transferred locally).`,
-        `Current URL: ${page.url()}`,
+        `Current URL: ${currentUrl}`,
         signedIn
-          ? "The session is signed in and ready. No terminal confirmation is required."
+          ? attached
+            ? "The session is signed in and ready. The attached browser remains open."
+            : "The session is signed in and ready. The temporary login window was closed; future automation runs invisibly."
           : "The account chooser contains the accounts already signed into the normal browser; no credentials need to be entered.",
       ].join("\n");
     });
@@ -275,7 +291,7 @@ export class FlowAdapter {
       page.locator('button[aria-label*="Google Account" i], a[aria-label*="Google Account" i]'),
       page.locator('img[alt*="profile" i], img[alt*="account" i]'),
     ]);
-    return Boolean(accountControl && /new project|my projects|scenebuilder/i.test(body));
+    return Boolean(accountControl);
   }
 
   private promptLocator(page: Page): Locator {

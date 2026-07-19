@@ -18,6 +18,8 @@ test("accounts use isolated profile directories and a stable default", async (co
   assert.deepEqual(accounts.accounts.map((account) => account.id), ["personal", "studio"]);
   assert.notEqual(store.profileDir("personal"), store.profileDir("studio"));
   assert.equal((await store.requireAccount()).id, "personal");
+  await store.setHeadlessAfterLogin("personal", true);
+  assert.equal((await store.requireAccount("personal")).headlessAfterLogin, true);
 });
 
 test("jobs persist without browser state", async (context) => {

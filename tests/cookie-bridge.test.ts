@@ -34,3 +34,11 @@ test("cookie bridge rejects normal web origins", async (context) => {
   const response = await fetch(`http://127.0.0.1:${port}/status`, { headers: { Origin: "https://example.com" } });
   assert.equal(response.status, 403);
 });
+
+test("cookie bridge accepts origin-less Chromium extension requests", async (context) => {
+  const bridge = new CookieBridge([0]);
+  context.after(async () => bridge.close());
+  const port = await bridge.start();
+  const response = await fetch(`http://127.0.0.1:${port}/status`);
+  assert.equal(response.status, 200);
+});

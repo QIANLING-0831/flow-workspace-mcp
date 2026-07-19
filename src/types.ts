@@ -22,6 +22,7 @@ export interface AccountRecord {
   browserMode?: "managed" | "extension" | "attach_cdp";
   cdpUrl?: string;
   browserExecutablePath?: string;
+  headlessAfterLogin?: boolean;
 }
 
 export interface AccountOptions {

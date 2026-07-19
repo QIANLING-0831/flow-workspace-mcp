@@ -133,7 +133,7 @@ export class BrowserManager {
         "--profile-directory=Default",
         "--no-first-run",
         "--no-default-browser-check",
-        ...(process.env.FLOW_MCP_HEADLESS === "1" ? ["--headless=new"] : []),
+        ...(process.env.FLOW_MCP_HEADLESS === "1" || account.headlessAfterLogin ? ["--headless=new"] : []),
         `--app=${FLOW_URL}`,
       ];
       const processHandle = spawn(executablePath, args, {

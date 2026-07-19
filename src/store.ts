@@ -140,6 +140,16 @@ export class FlowStore {
     });
   }
 
+  async setHeadlessAfterLogin(accountId: string, enabled: boolean): Promise<void> {
+    await this.withAccountsLock(async () => {
+      const file = await this.listAccounts();
+      const account = file.accounts.find((item) => item.id === accountId);
+      if (!account) return;
+      account.headlessAfterLogin = enabled;
+      await atomicWriteJson(this.accountsFile, file);
+    });
+  }
+
   profileDir(accountId: string): string {
     return path.join(this.profilesDir, validateAccountId(accountId));
   }

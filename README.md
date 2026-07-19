@@ -70,7 +70,7 @@ While the connection waits:
 2. Click **Connect Flow**.
 3. In the small Flow app window, click one of the Google accounts already signed into Chromium.
 
-That is the complete account-login flow. Do not enter an email, password, or 2FA code. The normal browser is not closed, restarted, debug-enabled, or modified. Completion is detected automatically, and the isolated Flow session is reused for future generations.
+That is the complete account-login flow. Do not enter an email, password, or 2FA code. The normal browser is not closed, restarted, debug-enabled, or modified. Completion is detected automatically; the temporary Flow login window closes, and future agent automation runs invisibly with the isolated session.
 
 Agents can provide the same onboarding with `flow_connect_account`; users do not need the CLI.
 
