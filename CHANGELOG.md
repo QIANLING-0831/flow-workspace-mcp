@@ -2,6 +2,23 @@
 
 All notable changes to Google Flow MCP are documented here.
 
+## [0.2.2] - 2026-07-19
+
+### Fixed
+
+- Video readiness now verifies the exact generated media URL instead of requiring hidden Flow `<video>` elements to preload metadata
+- Initial generation waits are bounded to 20 seconds; queued work returns a persistent `processing` job so later account operations are not blocked indefinitely
+- Status polling finalizes downloads already authorized by the original generation request
+- Original media downloads use the tracked asset URL directly, eliminating gallery visibility, ordering, localization, and context-menu failure modes
+- Multiple MCP processes now reuse a shared per-account Chromium CDP session and coordinate account operations across Antigravity chats
+- `flow_begin_account_connection` refuses unnecessary onboarding when a verified default account already exists
+- Failed new account connections remove their temporary account record instead of accumulating misleading entries
+
+### Agent contract
+
+- A `processing` generation must be polled with the same job ID and must never be resubmitted merely because Flow queued it
+- `flow_list_accounts` exposes explicit `readyForGeneration` and `connectionRequired` booleans
+
 ## [0.2.1] - 2026-07-19
 
 ### Fixed
@@ -87,3 +104,4 @@ All notable changes to Google Flow MCP are documented here.
 [0.1.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.1.1
 [0.2.0]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.0
 [0.2.1]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.1
+[0.2.2]: https://github.com/retrolyze52/google-flow-mcp/releases/tag/v0.2.2

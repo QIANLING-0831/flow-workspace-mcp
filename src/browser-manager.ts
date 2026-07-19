@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir, open, readFile, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { FlowError } from "./errors.js";
+import { validateAccountId } from "./paths.js";
 import { FlowStore } from "./store.js";
 import { FLOW_URL } from "./types.js";
 import type { TransferredCookie } from "./types.js";
@@ -13,6 +15,12 @@ interface AccountBrowser {
   context: BrowserContext;
   page: Page;
   close: () => Promise<void>;
+}
+
+interface SharedBrowserSession {
+  endpoint: string;
+  ownerPid: number;
+  createdAt: string;
 }
 
 function systemChromiumCandidates(): string[] {
@@ -97,11 +105,93 @@ export class BrowserManager {
 
   constructor(private readonly store: FlowStore) {}
 
+  private sessionDirectory(): string {
+    return path.join(this.store.dataDir, "browser-sessions");
+  }
+
+  private sessionFile(accountId: string): string {
+    return path.join(this.sessionDirectory(), `${validateAccountId(accountId)}.json`);
+  }
+
+  private launchLockFile(accountId: string): string {
+    return path.join(this.sessionDirectory(), `${validateAccountId(accountId)}.launch.lock`);
+  }
+
+  private operationLockFile(accountId: string): string {
+    return path.join(this.sessionDirectory(), `${validateAccountId(accountId)}.operation.lock`);
+  }
+
+  private async removeStaleLock(file: string): Promise<void> {
+    try {
+      const pid = Number.parseInt((await readFile(file, "utf8")).trim(), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          return;
+        } catch {
+          // The owner process is gone.
+        }
+      } else if (Date.now() - (await stat(file)).mtimeMs < 30_000) {
+        return;
+      }
+      await unlink(file);
+    } catch {
+      // Another process may have released it.
+    }
+  }
+
+  private async attachSharedBrowser(accountId: string): Promise<Page | null> {
+    let session: SharedBrowserSession;
+    try {
+      session = JSON.parse(await readFile(this.sessionFile(accountId), "utf8")) as SharedBrowserSession;
+    } catch {
+      return null;
+    }
+    if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(session.endpoint)) return null;
+    try {
+      const probe = await fetch(`${session.endpoint}/json/version`, { signal: AbortSignal.timeout(1_000) });
+      if (!probe.ok) return null;
+      const browser = await chromium.connectOverCDP(session.endpoint);
+      const context = browser.contexts()[0];
+      if (!context) return null;
+      const page = context.pages().find((candidate) => candidate.url().startsWith("https://labs.google/"))
+        ?? context.pages()[0]
+        ?? (await context.newPage());
+      this.preparePage(page);
+      this.browsers.set(accountId, { context, page, close: async () => undefined });
+      return page;
+    } catch {
+      return null;
+    }
+  }
+
+  private async acquireLaunchLock(accountId: string): Promise<FileHandle> {
+    await mkdir(this.sessionDirectory(), { recursive: true });
+    const file = this.launchLockFile(accountId);
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline) {
+      try {
+        const handle = await open(file, "wx");
+        await handle.writeFile(`${process.pid}\n`);
+        return handle;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        await this.removeStaleLock(file);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    throw new FlowError("browser_error", `Timed out waiting for another MCP process to finish opening account '${accountId}'.`);
+  }
+
   async pageFor(accountId: string): Promise<Page> {
     const existing = this.browsers.get(accountId);
     if (existing && !existing.page.isClosed()) return existing.page;
 
+    const shared = await this.attachSharedBrowser(accountId);
+    if (shared) return shared;
+
     const account = await this.store.requireAccount(accountId);
+    let launchLock: FileHandle | undefined;
     try {
       if (account.browserMode === "attach_cdp") {
         if (!account.cdpUrl) {
@@ -125,6 +215,9 @@ export class BrowserManager {
           ["Set FLOW_MCP_BROWSER_EXECUTABLE to the browser executable's absolute path."],
         );
       }
+      launchLock = await this.acquireLaunchLock(accountId);
+      const sharedAfterLock = await this.attachSharedBrowser(accountId);
+      if (sharedAfterLock) return sharedAfterLock;
       const port = await reserveLocalPort();
       const endpoint = `http://127.0.0.1:${port}`;
       const args = [
@@ -157,10 +250,15 @@ export class BrowserManager {
         ?? context.pages()[0]
         ?? (await context.newPage());
       this.preparePage(page);
+      const session: SharedBrowserSession = { endpoint, ownerPid: process.pid, createdAt: new Date().toISOString() };
+      await writeFile(this.sessionFile(accountId), `${JSON.stringify(session, null, 2)}\n`, "utf8");
       this.browsers.set(accountId, {
         context,
         page,
-        close: () => closeManagedBrowser(browser, processHandle),
+        close: async () => {
+          await closeManagedBrowser(browser, processHandle);
+          await unlink(this.sessionFile(accountId)).catch(() => undefined);
+        },
       });
       return page;
     } catch (error) {
@@ -173,6 +271,9 @@ export class BrowserManager {
           "For attach_cdp, confirm the localhost /json/version endpoint is reachable.",
         ],
       );
+    } finally {
+      await launchLock?.close().catch(() => undefined);
+      if (launchLock) await unlink(this.launchLockFile(accountId)).catch(() => undefined);
     }
   }
 
@@ -210,9 +311,28 @@ export class BrowserManager {
     const tail = previous.then(() => current);
     this.queues.set(accountId, tail);
     await previous;
+    await mkdir(this.sessionDirectory(), { recursive: true });
+    const operationLockFile = this.operationLockFile(accountId);
+    let operationLock: FileHandle | undefined;
     try {
+      const deadline = Date.now() + 90_000;
+      while (!operationLock && Date.now() < deadline) {
+        try {
+          operationLock = await open(operationLockFile, "wx");
+          await operationLock.writeFile(`${process.pid}\n`);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          await this.removeStaleLock(operationLockFile);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+      if (!operationLock) {
+        throw new FlowError("browser_error", `Timed out waiting for another MCP process using account '${accountId}'.`);
+      }
       return await operation();
     } finally {
+      await operationLock?.close().catch(() => undefined);
+      if (operationLock) await unlink(operationLockFile).catch(() => undefined);
       release();
       if (this.queues.get(accountId) === tail) this.queues.delete(accountId);
     }

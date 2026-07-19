@@ -115,6 +115,18 @@ export class FlowStore {
     });
   }
 
+  async removeAccountRecord(accountId: string): Promise<void> {
+    await this.withAccountsLock(async () => {
+      const id = validateAccountId(accountId);
+      const file = await this.listAccounts();
+      const filtered = file.accounts.filter((account) => account.id !== id);
+      if (filtered.length === file.accounts.length) return;
+      file.accounts = filtered;
+      if (file.defaultAccountId === id) delete file.defaultAccountId;
+      await atomicWriteJson(this.accountsFile, file);
+    });
+  }
+
   async availableAccountId(base: string): Promise<string> {
     const normalized = base.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "flow";
     const file = await this.listAccounts();
@@ -225,6 +237,7 @@ export class FlowStore {
       outputs: request.outputs,
       upscale: request.upscale,
       outputDirectory: request.outputDirectory,
+      downloadRequested: request.download,
       createdAt: now,
       updatedAt: now,
       ...(request.flowProject ? { flowProject: request.flowProject } : {}),

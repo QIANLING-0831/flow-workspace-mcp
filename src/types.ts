@@ -90,7 +90,10 @@ export interface FlowJob {
   upscale: UpscaleFactor;
   availableUpscales?: string[];
   chosenUpscale?: string;
+  upscaleSubmitted?: boolean;
+  upscaleBaselineMediaKeys?: string[];
   outputDirectory: string;
+  downloadRequested?: boolean;
   fileName?: string;
   downloadedFiles?: string[];
   mediaProbe?: MediaProbe[];

@@ -22,7 +22,7 @@ const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.ur
 
 const server = new McpServer({
   name: "flow-mcp",
-  version: "0.2.1",
+  version: "0.2.2",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 }, {
   instructions: FLOW_AGENT_INSTRUCTIONS,
@@ -114,18 +114,22 @@ server.registerTool(
   "flow_list_accounts",
   {
     title: "List Google Flow Accounts",
-    description: `MANDATORY FIRST STEP for Google Flow work. Lists account connectionStatus values and the verified default account. Use the connected default; never guess an ID. ${FLOW_TOOL_GUARD}`,
+    description: `MANDATORY FIRST STEP for Google Flow work. Returns readyForGeneration and the verified default account. When readyForGeneration=true, use defaultAccountId and DO NOT call either account-connection tool. ${FLOW_TOOL_GUARD}`,
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async () => {
     try {
       const accounts = await store.listAccounts();
+      const connectedAccountIds = accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id);
+      const readyForGeneration = Boolean(accounts.defaultAccountId && connectedAccountIds.includes(accounts.defaultAccountId));
       return ok({
         ...accounts,
-        connectedAccountIds: accounts.accounts.filter((account) => account.connectionStatus === "connected").map((account) => account.id),
-        agentInstruction: accounts.defaultAccountId
-          ? `Use account '${accounts.defaultAccountId}' unless the user explicitly chose another connected account. Next call flow_inspect_account; never open Flow with browser/computer-use tools.`
+        connectedAccountIds,
+        readyForGeneration,
+        connectionRequired: !readyForGeneration,
+        agentInstruction: readyForGeneration
+          ? `ACCOUNT IS ALREADY CONNECTED. Use '${accounts.defaultAccountId}'. Call flow_inspect_account next. DO NOT call flow_begin_account_connection, flow_complete_account_connection, flow_login_bridge_status, PowerShell, or browser/computer-use tools.`
           : "No verified default account exists. Call flow_begin_account_connection, STOP and tell the user to click Connect Flow in the extension, then wait for their reply before calling flow_complete_account_connection.",
       });
     } catch (error) {
@@ -165,6 +169,19 @@ server.registerTool(
   async ({ accountId: id, label }) => {
     try {
       const accounts = await store.listAccounts();
+      const connectedDefault = accounts.defaultAccountId
+        ? accounts.accounts.find((account) => account.id === accounts.defaultAccountId && account.connectionStatus === "connected")
+        : undefined;
+      if (connectedDefault && (!id || id === connectedDefault.id)) {
+        return ok({
+          status: "ALREADY_CONNECTED",
+          accountId: connectedDefault.id,
+          readyForGeneration: true,
+          connectionRequired: false,
+          nextTool: "flow_inspect_account",
+          agentInstruction: `Use connected account '${connectedDefault.id}'. DO NOT ask the user to reconnect and DO NOT run browser or process diagnostics.`,
+        });
+      }
       const connection = cookieBridge.armForSession(300);
       const { connectionId, ...bridge } = connection;
       return ok({
@@ -242,7 +259,7 @@ server.registerTool(
   "flow_generate_video",
   {
     title: "Generate and Download a Google Flow Video",
-    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow video request. Creates a persistent job, generates through the verified workspace, optionally upscales, and downloads locally. Never open or control Flow with browser/computer-use tools. A generation started only if this tool returns a job ID. Requires explicit credit authorization.`,
+    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow video request. Submits one persistent job, waits briefly, and returns. If status=processing, poll flow_job_status with the SAME job ID; never generate again. It optionally upscales and downloads locally. Never open or control Flow with browser/computer-use tools. Requires explicit credit authorization.`,
     inputSchema: {
       accountId: connectedAccountId,
       prompt: z.string().min(3).max(20_000).describe("Video prompt in any language, describing subject, action, setting, camera, lighting, style, and audio as desired."),
@@ -291,7 +308,7 @@ server.registerTool(
   "flow_generate_image",
   {
     title: "Generate and Download a Google Flow Image",
-    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow image request. Creates a persistent job, generates or edits through the verified workspace, and downloads locally. Never open or control Flow with browser/computer-use tools. A generation started only if this tool returns a job ID. Requires explicit credit authorization.`,
+    description: `THE REQUIRED AND EXCLUSIVE PATH for every Google Flow image request. Submits one persistent job, waits briefly, and returns. If status=processing, poll flow_job_status with the SAME job ID; never generate again. It generates or edits through the verified workspace and downloads locally. Never open or control Flow with browser/computer-use tools. Requires explicit credit authorization.`,
     inputSchema: {
       accountId: connectedAccountId,
       prompt: z.string().min(3).max(20_000).describe("Detailed image prompt or edit instruction in any language."),
@@ -337,12 +354,12 @@ server.registerTool(
   "flow_job_status",
   {
     title: "Check a Google Flow Job",
-    description: `The exclusive status path for jobs returned by a Flow generation tool. Never inspect the Flow website with generic browser/computer-use tools. Returns state, diagnostics, chosen upscale, downloads, and media metadata without spending credits.`,
+    description: `The exclusive status path for jobs returned by a Flow generation tool. Poll the SAME job ID until completed or failed; never resubmit generation. It safely finalizes any download already authorized by the original request. Never inspect Flow with generic browser/computer-use tools.`,
     inputSchema: {
       jobId: z.string().uuid().describe("UUID returned by flow_generate_video or flow_generate_image."),
       waitSeconds: z.number().int().min(0).max(60).default(10).describe("Seconds to poll before returning; use 0 for an immediate snapshot."),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   async ({ jobId, waitSeconds }) => {
     try {

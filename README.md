@@ -90,6 +90,7 @@ No email entry, password entry, 2FA entry, cookie JSON, Chromium restart, or rem
 - Detects Flow's real asset-menu upscale choices, including resolution-based options such as `1080p`
 - Captures browser downloads into an absolute project directory
 - Correlates every download to the exact asset identities created by that job, independent of gallery order
+- Downloads originals from the tracked Flow media URL, without relying on a visible gallery card or translated context menu
 - Fails closed instead of guessing when Flow cannot expose a unique job-to-asset match
 - Writes a `.flow.json` reproducibility manifest
 - Records SHA-256 and file size for every download
@@ -265,6 +266,8 @@ The expected agent workflow is:
 ### Exact job-to-asset downloads
 
 Flow may insert a newly generated asset anywhere in the project gallery; DOM order is not a creation timestamp. Google Flow MCP snapshots the existing asset identities before submitting a prompt, records only the identities that appear for that job, and uses those same identities for later upscale and download actions. It never substitutes “the last video” or “the latest visible image.” If the tracked identity disappears or becomes ambiguous after a Flow UI/session change, the operation stops with `generated_asset_not_found` instead of downloading a different asset.
+
+Flow often keeps completed gallery videos hidden or off-screen without loading HTML video metadata. Readiness is therefore verified against the exact generated media URL, and original downloads use that same authenticated URL directly. Generation tools wait at most 20 seconds after submission; if Flow is still queued, they return `processing` with a persistent job ID. The agent must poll that same ID—never submit the prompt again.
 
 Example video tool input:
 

@@ -4,6 +4,7 @@ export interface MediaSnapshot {
   index: number;
   keys: string[];
   ready: boolean;
+  sourceUrl?: string;
 }
 
 function overlaps(left: string[], right: ReadonlySet<string>): boolean {

@@ -45,6 +45,20 @@ test("a signed-in landing page account cannot be used for generation", async (co
   });
 });
 
+test("temporary account records can be removed without disturbing the connected default", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-store-cleanup-"));
+  context.after(async () => rm(temporary, { recursive: true, force: true }));
+  const store = new FlowStore(temporary);
+  await store.ensureAccount("connected", "Connected");
+  await store.markAccountConnected("connected");
+  await store.ensureAccount("failed-temp", "Failed temporary account");
+
+  await store.removeAccountRecord("failed-temp");
+  const accounts = await store.listAccounts();
+  assert.deepEqual(accounts.accounts.map((account) => account.id), ["connected"]);
+  assert.equal(accounts.defaultAccountId, "connected");
+});
+
 test("jobs persist without browser state", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-job-"));
   context.after(async () => rm(temporary, { recursive: true, force: true }));
@@ -67,6 +81,7 @@ test("jobs persist without browser state", async (context) => {
   assert.equal(restored.status, "processing");
   assert.equal(restored.baselineMediaCount, 3);
   assert.equal(restored.upscale, "2x");
+  assert.equal(restored.downloadRequested, true);
 });
 
 test("CDP account attachment is localhost-only and persisted", async (context) => {

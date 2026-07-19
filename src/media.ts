@@ -3,9 +3,23 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { MediaProbe } from "./types.js";
+import type { MediaProbe, MediaType } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+export function mediaExtension(contentType: string, type: MediaType): string {
+  const normalized = contentType.toLowerCase().split(";", 1)[0]?.trim();
+  const extensions: Record<string, string> = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+  };
+  return extensions[normalized ?? ""] ?? (type === "video" ? ".mp4" : ".png");
+}
 
 async function sha256(file: string): Promise<string> {
   return new Promise((resolve, reject) => {

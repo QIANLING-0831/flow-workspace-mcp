@@ -1,11 +1,11 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Download, Locator, Page } from "playwright";
+import type { APIResponse, Download, Locator, Page } from "playwright";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
 import { CookieBridge } from "./cookie-bridge.js";
 import { FlowError } from "./errors.js";
-import { probeMedia } from "./media.js";
+import { mediaExtension, probeMedia } from "./media.js";
 import {
   flattenMediaKeys,
   identitiesFor,
@@ -128,12 +128,14 @@ export class FlowAdapter {
     const selectionWaitSeconds = options.waitForAccountSelectionSeconds ?? 300;
     const transferred = attached ? undefined : await this.cookieBridge.waitForSession(bridgeWaitSeconds);
     const id = accountId ?? await this.store.availableAccountId(transferred?.profile || "flow-account");
+    const accountAlreadyExisted = (await this.store.listAccounts()).accounts.some((item) => item.id === id);
     const account = await this.store.ensureAccount(id, label ?? transferred?.profile, {
       browserMode: attached ? "attach_cdp" : "extension",
       ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
     });
     if (!attached) await this.store.setHeadlessAfterLogin(account.id, false);
-    return this.browsers.runExclusive(account.id, async () => {
+    try {
+      return await this.browsers.runExclusive(account.id, async () => {
       await this.browsers.reset(account.id);
       const page = transferred
         ? await this.browsers.importCookies(account.id, transferred.cookies)
@@ -209,7 +211,11 @@ export class FlowAdapter {
             : "The session is signed in and ready. The temporary login window was closed; future automation runs invisibly."
           : "The account chooser contains the accounts already signed into the normal browser; no credentials need to be entered.",
       ].join("\n");
-    });
+      });
+    } catch (error) {
+      if (!accountAlreadyExisted) await this.store.removeAccountRecord(account.id);
+      throw error;
+    }
   }
 
   async inspect(accountId?: string): Promise<UiCapabilities> {
@@ -348,25 +354,11 @@ export class FlowAdapter {
           request.mediaType,
           baselineMediaKeys,
           request.outputs,
-          request.timeoutSeconds,
+          Math.min(request.timeoutSeconds, 20),
         );
         if (!generated) return job;
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
-
-        if (request.mediaType === "video" && request.upscale !== "none") {
-          await this.store.updateJob(job, "upscaling");
-          const upscaled = await this.upscaleLatest(page, job, request.upscale, request.timeoutSeconds);
-          if (!upscaled) return job;
-          if (job.status === "completed") return job;
-        }
-
-        if (request.download) {
-          await this.store.updateJob(job, "downloading");
-          await this.downloadTracked(page, job);
-        } else {
-          await this.store.updateJob(job, "completed");
-        }
-        return job;
+        return await this.finalizeReadyJob(page, job, Math.min(request.timeoutSeconds, 20));
       } catch (error) {
         const screenshot = page ? await this.captureDiagnostic(page, `job-${job.id}`) : undefined;
         const message = error instanceof Error ? error.message : String(error);
@@ -385,12 +377,24 @@ export class FlowAdapter {
     if (["completed", "failed", "needs_attention"].includes(job.status)) return job;
     return this.browsers.runExclusive(job.accountId, async () => {
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
+      if (job.status === "ready" && job.generatedAssets?.length) {
+        return await this.finalizeReadyJob(page, job, timeoutSeconds);
+      }
+      if (job.upscaleSubmitted && job.upscaleBaselineMediaKeys?.length) {
+        const upscaled = await this.waitForNewMedia(page, "video", job.upscaleBaselineMediaKeys, 1, timeoutSeconds);
+        if (upscaled) {
+          await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(upscaled) });
+          return await this.finalizeReadyJob(page, job, timeoutSeconds);
+        }
+        return job;
+      }
       if (!job.baselineMediaKeys) {
         throw new FlowError("job_asset_identity_missing", "This job predates exact asset tracking and cannot be refreshed safely. Generate it again with the current MCP version.");
       }
       const generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds);
       if (generated && job.status === "processing") {
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
+        return await this.finalizeReadyJob(page, job, timeoutSeconds);
       }
       return job;
     });
@@ -416,6 +420,21 @@ export class FlowAdapter {
       await this.downloadTracked(page, job);
       return job;
     });
+  }
+
+  private async finalizeReadyJob(page: Page, job: FlowJob, timeoutSeconds: number): Promise<FlowJob> {
+    if (job.mediaType === "video" && job.upscale !== "none" && !job.chosenUpscale) {
+      await this.store.updateJob(job, "upscaling");
+      const upscaled = await this.upscaleLatest(page, job, job.upscale, timeoutSeconds);
+      if (!upscaled || job.status === "completed") return job;
+    }
+    if (job.downloadRequested) {
+      await this.store.updateJob(job, "downloading");
+      await this.downloadTracked(page, job);
+    } else {
+      await this.store.updateJob(job, "completed");
+    }
+    return job;
   }
 
   private async readyPage(accountId: string, requireLogin: boolean, url?: string): Promise<Page> {
@@ -908,8 +927,14 @@ export class FlowAdapter {
   private async mediaSnapshots(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
     return this.mediaLocator(page, type).evaluateAll((elements) => elements.map((element, index) => {
       const keys: string[] = [];
+      let sourceUrl: string | undefined;
       const addUrl = (raw: string | null | undefined) => {
         if (!raw) return;
+        try {
+          sourceUrl ??= new URL(raw, window.location.href).href;
+        } catch {
+          // Identity fallback below still applies.
+        }
         keys.push(`url:${raw}`);
         if (!raw.startsWith("blob:")) {
           try {
@@ -958,7 +983,7 @@ export class FlowAdapter {
       const ready = element instanceof HTMLVideoElement
         ? element.readyState >= 1 && Number.isFinite(element.duration) && element.duration > 0
         : element instanceof HTMLImageElement && element.complete && element.naturalWidth >= 256;
-      return { index, keys: [...new Set(keys)], ready };
+      return { index, keys: [...new Set(keys)], ready, ...(sourceUrl ? { sourceUrl } : {}) };
     }));
   }
 
@@ -1000,13 +1025,30 @@ export class FlowAdapter {
         }
       }).catch(() => undefined);
       const candidates = selectNewMedia(await this.mediaSnapshots(page, type), baselineKeys);
-      const ready = candidates.filter((candidate) => candidate.ready);
+      const readiness = await Promise.all(candidates.map(async (candidate) => ({
+        candidate,
+        ready: candidate.ready || await this.isMediaSourceReady(page, candidate, type),
+      })));
+      const ready = readiness.filter((entry) => entry.ready).map((entry) => entry.candidate);
       if (ready.length >= expectedCount) {
         return ready.slice(0, expectedCount);
       }
       await page.waitForTimeout(2_000);
     }
     return null;
+  }
+
+  private async isMediaSourceReady(page: Page, candidate: MediaSnapshot, type: MediaType): Promise<boolean> {
+    if (!candidate.sourceUrl || candidate.sourceUrl.startsWith("blob:")) return false;
+    try {
+      const response = await page.context().request.head(candidate.sourceUrl, { timeout: 8_000 });
+      const contentType = response.headers()["content-type"]?.toLowerCase() ?? "";
+      const ready = response.ok() && contentType.startsWith(`${type}/`);
+      await response.dispose();
+      return ready;
+    } catch {
+      return false;
+    }
   }
 
   private async openAssetMenu(page: Page, media: Locator): Promise<void> {
@@ -1110,6 +1152,8 @@ export class FlowAdapter {
     await this.store.updateJob(job, "upscaling", {
       availableUpscales: options,
       chosenUpscale: chosen,
+      upscaleSubmitted: true,
+      upscaleBaselineMediaKeys: flattenMediaKeys(before),
     });
     const choice = await this.findVisibleMenuOption(page, chosen);
     if (!choice) throw new FlowError("ui_changed", `Flow offered '${chosen}', but its control disappeared before selection.`);
@@ -1152,53 +1196,55 @@ export class FlowAdapter {
 
   private async downloadTracked(page: Page, job: FlowJob): Promise<void> {
     await mkdir(job.outputDirectory, { recursive: true });
-    const media = this.mediaLocator(page, job.mediaType);
     const tracked = this.resolveTrackedMedia(await this.mediaSnapshots(page, job.mediaType), job);
     const assetCount = tracked.length;
     const downloaded: string[] = [];
 
     for (let offset = 0; offset < assetCount; offset += 1) {
       const targetSnapshot = tracked[offset]!;
-      const target = media.nth(targetSnapshot.index);
-      await this.openAssetMenu(page, target);
-      const control = await firstVisible([
-        page.locator('[role="menuitem"]').filter({ has: page.locator("i.google-symbols", { hasText: /^download$/ }) }),
-        page.getByRole("menuitem", { name: /download/i }),
-        page.getByRole("button", { name: /download/i }),
-        page.getByText(/^download/i),
-      ]);
-      if (!control) throw new FlowError("download_failed", "The generated asset menu did not contain Download.");
-      const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
-      let choice: Locator | null = null;
-      if (await control.getAttribute("aria-haspopup")) {
-        await control.hover({ force: true });
-        await page.waitForTimeout(400);
-        if (job.mediaType === "video") {
-          const originalHeight = await target.evaluate((element) => element instanceof HTMLVideoElement ? element.videoHeight : 0)
-            .catch(() => 0);
-          if (originalHeight) choice = await this.findVisibleMenuOption(page, `${originalHeight}p`);
-        }
-        choice ??= await firstVisible([
-          page.getByRole("menuitem", { name: /\b(?:png|jpe?g|original|video file)\b/i }).last(),
-        ]);
+      if (!targetSnapshot.sourceUrl) {
+        throw new FlowError("download_failed", "The tracked Flow asset has no downloadable source URL.");
       }
-      if (choice) await choice.click();
-      else await control.click();
-
-      let download;
+      let response: APIResponse | undefined;
       try {
-        download = await downloadPromise;
-      } catch {
-        throw new FlowError("download_failed", "Flow did not start a browser download after the Download action.");
+        let contentType: string;
+        let body: Buffer;
+        if (targetSnapshot.sourceUrl.startsWith("blob:")) {
+          const captured = await page.evaluate(async (url) => {
+            const result = await fetch(url);
+            if (!result.ok) throw new Error(`HTTP ${result.status}`);
+            const bytes = new Uint8Array(await result.arrayBuffer());
+            let binary = "";
+            for (let index = 0; index < bytes.length; index += 32_768) {
+              binary += String.fromCharCode(...bytes.subarray(index, index + 32_768));
+            }
+            return { base64: btoa(binary), contentType: result.headers.get("content-type") ?? "" };
+          }, targetSnapshot.sourceUrl);
+          contentType = captured.contentType.toLowerCase();
+          body = Buffer.from(captured.base64, "base64");
+        } else {
+          response = await page.context().request.get(targetSnapshot.sourceUrl, { timeout: 120_000 });
+          contentType = response.headers()["content-type"]?.toLowerCase() ?? "";
+          if (!response.ok()) {
+            throw new FlowError("download_failed", `Flow returned HTTP ${response.status()} for the tracked asset.`);
+          }
+          body = await response.body();
+        }
+        if (!contentType.startsWith(`${job.mediaType}/`)) {
+          throw new FlowError("download_failed", `Flow returned ${contentType || "an unknown content type"} for the tracked asset.`);
+        }
+        const extension = mediaExtension(contentType, job.mediaType);
+        const stem = safeFileStem(job.fileName || job.prompt.slice(0, 60));
+        const suffix = assetCount > 1 ? `-${offset + 1}` : "";
+        const destination = path.join(job.outputDirectory, `${stem}-${job.id.slice(0, 8)}${suffix}${extension}`);
+        await writeFile(destination, body);
+        downloaded.push(destination);
+      } catch (error) {
+        if (error instanceof FlowError) throw error;
+        throw new FlowError("download_failed", `Could not download the tracked Flow asset: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        await response?.dispose().catch(() => undefined);
       }
-      const suggested = download.suggestedFilename();
-      const extension = path.extname(suggested) || (job.mediaType === "video" ? ".mp4" : ".png");
-      const stem = safeFileStem(job.fileName || job.prompt.slice(0, 60));
-      const suffix = assetCount > 1 ? `-${offset + 1}` : "";
-      const destination = path.join(job.outputDirectory, `${stem}-${job.id.slice(0, 8)}${suffix}${extension}`);
-      await download.saveAs(destination);
-      downloaded.push(destination);
-      await page.keyboard.press("Escape").catch(() => undefined);
     }
 
     const probes = await Promise.all(downloaded.map((file) => probeMedia(file)));

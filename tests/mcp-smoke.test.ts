@@ -50,6 +50,7 @@ test("MCP server exposes the intended Flow tools", async (context) => {
   const accounts = await client.callTool({ name: "flow_list_accounts", arguments: {} });
   assert.equal(accounts.isError, undefined);
   assert.match((accounts.content[0] as { type: "text"; text: string }).text, /"accounts": \[\]/);
+  assert.match((accounts.content[0] as { type: "text"; text: string }).text, /"connectionRequired": true/);
   assert.match((accounts.content[0] as { type: "text"; text: string }).text, /No verified default account exists/);
   const help = await client.callTool({ name: "flow_help", arguments: {} });
   assert.equal(help.isError, undefined);
