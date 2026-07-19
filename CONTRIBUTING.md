@@ -1,10 +1,29 @@
 # Contributing
 
-1. Create a feature branch.
-2. Run `npm ci`.
-3. Make focused changes. Keep Flow selectors semantic and centralized in `src/flow-adapter.ts`; do not add hashed CSS class names.
-4. Add or update tests.
-5. Run `npm run check`.
-6. Open a pull request describing the Flow UI state and account tier used for live verification.
+Contributions are welcome, especially fixes for Flow UI changes, browser compatibility, accessibility, tests, and documentation.
 
-Never include Google profile data, cookies, generated private media, or diagnostic screenshots from a real account in commits or issues.
+## Development setup
+
+```powershell
+npm ci
+npm run check
+```
+
+Node.js 20 or newer is required. CI runs on Windows and Linux with Node.js 20 and 24.
+
+## Pull requests
+
+1. Keep changes focused and explain the user-visible behavior.
+2. Add or update tests for pure parsing, validation, persistence, and MCP schemas.
+3. Run `npm run check` and `npm pack --dry-run`.
+4. Do not commit Flow profiles, cookies, generated account data, diagnostics, `.env` files, or personal output.
+5. Prefer semantic roles, stable attributes, and Material Symbol names over translated text and hashed CSS classes.
+6. State whether a Flow interaction was live-tested and whether it consumed credits.
+
+## Live testing
+
+Live tests require a user-owned Google account and may spend subscription credits. Never add live credentials to CI. Credit-consuming tests must be opt-in and clearly disclose their expected cost before execution.
+
+## UI-change reports
+
+When reporting a broken selector, include the Flow locale, media type, intended model, and a redacted diagnostic screenshot. Remove email addresses, avatars, project names, prompts, cookies, and other personal information.

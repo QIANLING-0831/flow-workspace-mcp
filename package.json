@@ -1,11 +1,12 @@
 {
-  "name": "flow-mcp",
+  "name": "google-flow-mcp",
   "version": "0.1.0",
-  "description": "Local MCP server for automating Google Flow with subscription credits through a user-owned Chrome session.",
+  "description": "MCP server for Google Flow video and image generation with live capability discovery, multi-account Chromium login, upscaling, and validated local downloads—no generation API key.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
+    "google-flow-mcp": "dist/index.js",
     "flow-mcp": "dist/index.js",
     "flow-mcp-cli": "dist/cli.js"
   },
@@ -14,6 +15,9 @@
     "extension",
     "scripts/install-extension.ps1",
     "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
@@ -32,12 +36,27 @@
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "google-flow",
+    "google-antigravity",
+    "codex",
     "veo",
+    "omni-flash",
     "nano-banana",
+    "video-generation",
+    "image-generation",
     "playwright",
     "remotion"
   ],
+  "author": "retrolyze52",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/retrolyze52/google-flow-mcp.git"
+  },
+  "homepage": "https://github.com/retrolyze52/google-flow-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/retrolyze52/google-flow-mcp/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

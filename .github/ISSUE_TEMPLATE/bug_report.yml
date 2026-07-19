@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible Google Flow MCP problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include cookies, passwords, browser-profile files, or unredacted account information.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: 0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chromium 143
+    validations:
+      required: true
+  - type: input
+    id: locale
+    attributes:
+      label: Flow UI language
+      placeholder: en, es, fr
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the MCP tool, expected behavior, actual behavior, and exact redacted error.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Sensitive-data check
+      options:
+        - label: I removed cookies, credentials, email addresses, avatars, and other private account data.
+          required: true

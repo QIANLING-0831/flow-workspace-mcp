@@ -1,17 +1,35 @@
-# Security
+# Security policy
 
-## Account data
+## Supported versions
 
-`flow-mcp` never asks for or stores Google passwords or 2FA codes. The Flow Login Bridge reads Google cookies only after a user click and transfers them over localhost to the running MCP process. Raw transfer payloads remain in memory and are never logged or written as JSON. Chromium persists the resulting isolated Flow session under the platform application-data directory. Optional CDP attachment is restricted to localhost endpoints.
-
-The localhost bridge rejects normal web origins, validates Google-only cookie domains, limits payload size, and listens only on `127.0.0.1`. Install only a reviewed copy of the bundled extension; any extension with cookie permission is security-sensitive.
-
-Do not commit a directory supplied through `FLOW_MCP_DATA_DIR`. Treat copied browser profiles as credentials.
+Google Flow MCP is currently an alpha release. Security fixes are applied to the latest commit on `main`.
 
 ## Reporting a vulnerability
 
-Please open a private GitHub security advisory rather than a public issue. Include reproduction steps, affected versions, and the smallest practical proof of concept. Do not include real cookies, account identifiers, prompts, or generated private media.
+Please use GitHub's private vulnerability reporting feature for this repository. Do not open a public issue containing session cookies, browser profile data, diagnostic screenshots with account information, or a working exploit.
 
-## Automation boundary
+Include:
 
-This project automates visible controls in a user-owned browser session. It intentionally does not bypass CAPTCHA, account verification, access controls, quotas, regional restrictions, or safety policies.
+- A concise description of the impact
+- Reproduction steps using a test account where possible
+- Affected operating system and browser
+- The relevant commit or version
+- Any suggested mitigation
+
+## Threat model
+
+The Flow Login Bridge extension has permission to read Google-domain cookies after a user clicks **Connect Flow**. This is sensitive access. The current design reduces exposure by:
+
+- Binding the receiver only to `127.0.0.1`
+- Restricting the receiver to a small fixed port range
+- Rejecting normal web origins
+- Validating cookie domains, sizes, count, and payload size
+- Holding an unclaimed transfer in memory for at most two minutes
+- Importing the session into a local isolated Chromium profile
+- Never transmitting the session to a remote service operated by this project
+
+The isolated Chromium profile and its cookies remain sensitive local data. Protect the operating-system account, do not sync or commit the runtime data directory, and reconnect the account if the browser session is revoked.
+
+## Explicit non-goals
+
+This project does not bypass CAPTCHA, Google verification, safety filters, quotas, subscription requirements, regional restrictions, or account access controls. It is not an official Google API or security boundary.

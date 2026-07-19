@@ -1,110 +1,189 @@
-# flow-mcp
+<div align="center">
 
-Local Model Context Protocol server that lets an AI agent operate [Google Flow](https://labs.google/fx/tools/flow) through your own signed-in Chromium session, wait for generated video or image assets, use the upscale choices actually offered by Flow, and download validated files into a local project.
+# Google Flow MCP
 
-It uses no Google generation API key. Subscription credits are consumed through the Flow website exactly as when you operate it manually.
+**Generate and download Google Flow videos and images directly from AI agents—using your existing Google subscription, with no generation API key.**
 
-> Status: early UI-automation release. Google Flow changes frequently. The server fails with diagnostics instead of silently clicking an uncertain control, but live selectors may need recalibration after Flow UI updates.
+[![CI](https://github.com/retrolyze52/google-flow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/retrolyze52/google-flow-mcp/actions/workflows/ci.yml)
+[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/Model_Context_Protocol-compatible-7c3aed)](https://modelcontextprotocol.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](#project-status)
 
-## Features
+Works with **OpenAI Codex**, **Google Antigravity**, and other local stdio MCP clients.
 
-- One-click Flow Login Bridge that reuses Google accounts already signed into normal Chromium.
-- Separate persistent Flow session for every selected Google account.
-- No email, password, 2FA, cookie JSON, browser restart, or terminal confirmation during account connection.
-- Optional localhost CDP attachment to reuse an explicitly debug-enabled Chromium session.
-- Per-account operation queue; different accounts can run independently.
-- Live, language-independent capability discovery with normalized model IDs, exact labels, selected state, ratios, output counts, durations, and asset actions.
-- Video and image generation in any prompt language with model, aspect ratio, duration (when exposed), output count, and reference files.
-- Dynamic Flow asset-menu upscale support, including factor labels such as `2x` and resolution labels such as `1080p` or `4k`.
-- Reports both available and unavailable/upgrade-only upscale choices and never silently downgrades a request.
-- Persistent jobs for long-running generations.
-- Browser download capture into any absolute project directory.
-- `.flow.json` sidecar manifest containing prompt, settings, account ID, upscale choice, and job history.
-- SHA-256, file size, and optional `ffprobe` metadata for downloaded media.
-- Diagnostic screenshots on UI failures.
-- Explicit `confirmCreditSpend: true` gate on generation and upscale tools.
+[Features](#why-google-flow-mcp) · [Quick start](#quick-start) · [Connect an account](#connect-your-google-account) · [Clients](#connect-your-mcp-client) · [Tools](#mcp-tools) · [Security](#security)
 
-## Requirements
+</div>
 
-- Node.js 20 or newer.
-- Chromium or Google Chrome. Auto-detection prefers Chromium.
-- The bundled Flow Login Bridge extension, installed once in the normal browser.
-- A Google account with access to Flow in a supported region.
-- Optional: `ffprobe` on `PATH` for video resolution, codec, and duration validation.
+---
 
-## Install
+Google Flow MCP is a local [Model Context Protocol](https://modelcontextprotocol.io/) server that lets an AI agent operate [Google Flow](https://labs.google/fx/tools/flow) through a user-owned Chromium session. It can discover the exact options available to each account, generate media with Flow subscription credits, wait for long-running jobs, use the upscale choices Flow actually offers, and save validated files directly into a project.
 
-```powershell
-git clone https://github.com/YOUR_USER/flow-mcp.git
-cd flow-mcp
-npm ci
-npm run check
+It does **not** require a Google generation API key. Credits are consumed through the Flow website just as they are when the user operates Flow manually.
+
+## Why Google Flow MCP
+
+### The agent knows what the account can actually do
+
+`flow_inspect_account` returns a live, normalized capability contract instead of relying on hardcoded assumptions:
+
+- Image and video models, with stable IDs and the currently selected model
+- Aspect ratios separated by media type
+- Output counts separated by media type
+- Selectable durations—only when Flow exposes a duration control
+- Preview, original, available upscale, and unavailable/upgrade-only asset options
+- Current Flow UI language and login state
+
+Example from a real Spanish-language Flow account:
+
+```json
+{
+  "models": {
+    "image": [
+      { "id": "nano-banana-pro", "label": "Nano Banana Pro", "selected": false },
+      { "id": "nano-banana-2", "label": "Nano Banana 2", "selected": true },
+      { "id": "nano-banana-2-lite", "label": "Nano Banana 2 Lite", "selected": false }
+    ],
+    "video": [
+      { "id": "omni-flash", "label": "Omni Flash", "selected": true },
+      { "id": "veo-3-1-lite", "label": "Veo 3.1 - Lite", "selected": false },
+      { "id": "veo-3-1-fast", "label": "Veo 3.1 - Fast", "selected": false },
+      { "id": "veo-3-1-quality", "label": "Veo 3.1 - Quality", "selected": false }
+    ]
+  },
+  "aspectRatiosByMedia": {
+    "image": ["16:9", "4:3", "1:1", "3:4", "9:16"],
+    "video": ["16:9", "9:16"]
+  },
+  "outputCountsByMedia": {
+    "image": [1, 2, 3, 4],
+    "video": [1, 2, 3, 4]
+  },
+  "visibleDurations": [],
+  "availableUpscales": ["1080p"],
+  "unavailableUpscales": ["4k"]
+}
 ```
 
-Playwright controls your locally installed Chromium/Chrome executable, so a separate bundled browser download is not required. Set `FLOW_MCP_BROWSER_EXECUTABLE` only when auto-detection cannot find it.
+If Flow does not offer a requested model, ratio, duration, output count, or upscale, the MCP fails explicitly. It never silently substitutes a different paid option.
 
-## One-time bridge installation
+### Account connection without entering credentials again
 
-The bridge extension is bundled in `extension/`. It only reads Google cookies after the user clicks **Connect Flow**, and sends them to the running MCP server over `127.0.0.1`. It cannot contact a remote server with those cookies and never reads passwords or 2FA codes.
+The bundled **Flow Login Bridge** extension reuses Google accounts already signed into the user's normal Chromium profile:
 
-On Windows, run:
+1. The user clicks **Connect Flow** in the extension.
+2. Google displays the existing-account chooser in a temporary Flow window.
+3. The user clicks an account they already use.
+4. The temporary window closes after connection; future automation runs in an isolated persistent session.
+
+No email entry, password entry, 2FA entry, cookie JSON, Chromium restart, or remote-debugging launch is required for the normal login path.
+
+### End-to-end media delivery
+
+- Generates video with Omni Flash or the Veo models exposed by the account
+- Generates or edits images with the Nano Banana models exposed by the account
+- Accepts prompts in any language
+- Supports ratios, output counts, optional references, and durations when available
+- Persists jobs that outlive an MCP request timeout
+- Detects Flow's real asset-menu upscale choices, including resolution-based options such as `1080p`
+- Captures browser downloads into an absolute project directory
+- Writes a `.flow.json` reproducibility manifest
+- Records SHA-256 and file size for every download
+- Adds duration, dimensions, codec, and format when `ffprobe` is installed
+- Saves diagnostic screenshots when Flow's UI changes
+
+### Designed for agents without hiding credit use
+
+Generation and upscale tools require `confirmCreditSpend: true`. The agent should set it only after the user explicitly asks for a credit-consuming operation. Read-only inspection, status, and account-list tools do not spend credits.
+
+## Quick start
+
+### Requirements
+
+- Node.js 20 or newer
+- Chromium or Google Chrome
+- A Google account with access to Flow in a supported region
+- Optional: `ffprobe` on `PATH` for richer media validation
+
+### Install
+
+```powershell
+git clone https://github.com/retrolyze52/google-flow-mcp.git
+cd google-flow-mcp
+npm ci
+npm run build
+```
+
+Playwright controls the locally installed Chromium/Chrome executable; it does not require a separate bundled browser download. Set `FLOW_MCP_BROWSER_EXECUTABLE` to an absolute browser path only if auto-detection cannot find it.
+
+## Connect your Google account
+
+### 1. Install the Flow Login Bridge once
+
+The reviewed extension source is included in [`extension/`](extension/). It reads Google cookies only after the user clicks **Connect Flow** and sends them only to the MCP bridge bound to `127.0.0.1`. It never reads passwords or 2FA codes.
+
+On Windows with Chromium:
 
 ```powershell
 npm run install-extension
 ```
 
-This copies the extension folder path and opens Chromium's extension page. Enable **Developer mode**, choose **Load unpacked**, and paste the copied `extension` folder path. This one-time install does not restart Chromium. A published Chrome Web Store package can replace this unpacked-install step for end users.
+The helper copies the extension path and opens `chrome://extensions/`. Then:
 
-## Connect one or more accounts
+1. Enable **Developer mode**.
+2. Click **Load unpacked**.
+3. Select the repository's `extension` directory.
 
-Start account connection from an MCP agent with `flow_connect_account`, or from the CLI:
+For Chrome or another desktop platform, open `chrome://extensions/` manually and follow the same three steps. No browser restart is needed.
+
+### 2. Start connection from the agent
+
+Ask the agent:
+
+> Connect my Google Flow account as `personal`.
+
+The agent calls `flow_connect_account` and waits. While it is waiting:
+
+1. Open **Flow Login Bridge** in the already-running normal browser.
+2. Click **Connect Flow**.
+3. Click one of the Google accounts shown in the temporary chooser.
+
+That is the complete normal login flow. Completion is detected automatically and the temporary Flow window closes.
+
+To connect additional accounts, repeat the process with IDs such as `studio` or `backup`. Each account receives an isolated persistent browser profile. Operations for one account are serialized; separate accounts can progress independently.
+
+CLI equivalents are also available:
 
 ```powershell
 npm run account -- connect personal "Personal Google Pro"
-npm run account -- connect studio "Studio Google account"
+npm run account -- connect studio "Studio account"
 npm run account -- list
 ```
 
-While the connection waits:
+### Advanced: attach to localhost CDP
 
-1. Click **Flow Login Bridge** in the already-running normal Chromium window.
-2. Click **Connect Flow**.
-3. In the small Flow app window, click one of the Google accounts already signed into Chromium.
-
-That is the complete account-login flow. Do not enter an email, password, or 2FA code. The normal browser is not closed, restarted, debug-enabled, or modified. Completion is detected automatically; the temporary Flow login window closes, and future agent automation runs invisibly with the isolated session.
-
-Agents can provide the same onboarding with `flow_connect_account`; users do not need the CLI.
-
-### Reuse an existing Chromium session with CDP
-
-If Chromium was deliberately started with a localhost remote-debugging port, connect directly to that signed-in session:
+If a browser was deliberately started with a localhost remote-debugging port, the MCP can attach without copying cookies:
 
 ```powershell
 npm run account -- connect personal "Main Chromium" --cdp http://127.0.0.1:9222
 ```
 
-This advanced mode does not copy or decrypt browser cookies. `flow-mcp` only accepts localhost CDP endpoints and does not close attached browsers. Use the extension mode for normal setup.
+Only localhost CDP endpoints are accepted, and attached browsers are never closed by the MCP. The extension flow is recommended for normal setup.
 
-Default runtime data locations:
+## Connect your MCP client
 
-- Windows: `%LOCALAPPDATA%\flow-mcp`
-- macOS: `~/Library/Application Support/flow-mcp`
-- Linux: `$XDG_DATA_HOME/flow-mcp` or `~/.local/share/flow-mcp`
+Run `npm run build` first. Replace the paths below with the absolute location of `dist/index.js`.
 
-Override with `FLOW_MCP_DATA_DIR`. Never place or commit that directory inside a public repository.
+### OpenAI Codex
 
-## Build and connect an MCP client
-
-```powershell
-npm run build
-```
-
-Codex-style `config.toml`:
+Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.google_flow]
 command = "node"
-args = ["C:\\absolute\\path\\to\\flow-mcp\\dist\\index.js"]
+args = ["C:\\absolute\\path\\to\\google-flow-mcp\\dist\\index.js"]
+enabled = true
 startup_timeout_sec = 30
 tool_timeout_sec = 1200
 
@@ -112,31 +191,64 @@ tool_timeout_sec = 1200
 FLOW_MCP_HEADLESS = "0"
 ```
 
-Generic MCP JSON used by several desktop clients:
+Open a new Codex task after changing MCP configuration. This does not restart Chromium or require another Google login.
+
+### Google Antigravity
+
+Antigravity 2.0, Antigravity IDE, and Antigravity CLI support custom MCP servers. Open **MCP Servers → Manage MCP Servers → View raw config**, or edit the shared `~/.gemini/config/mcp_config.json`, and add:
 
 ```json
 {
   "mcpServers": {
     "google-flow": {
       "command": "node",
-      "args": ["C:\\absolute\\path\\to\\flow-mcp\\dist\\index.js"]
+      "args": ["C:\\absolute\\path\\to\\google-flow-mcp\\dist\\index.js"],
+      "env": {
+        "FLOW_MCP_HEADLESS": "0"
+      }
     }
   }
 }
 ```
 
-Restart the MCP client after changing its configuration.
+Then open **Settings → Customizations → Installed MCP Servers** and click **Refresh**. In Antigravity CLI, use `/mcp` to inspect the server and its tools. See Google's [Antigravity MCP configuration guide](https://codelabs.developers.google.com/google-workspace-mcp-antigravity).
 
-## Agent workflow
+### Other stdio MCP clients
 
-1. Call `flow_list_accounts` and select an account.
-2. If necessary, tell the user to click the bridge extension, then call `flow_connect_account`; it detects the transfer and existing-account selection automatically.
-3. Call `flow_inspect_account` immediately before generation to get the live capability map. Use its normalized IDs instead of guessing what the account offers.
-4. Call `flow_generate_video` or `flow_generate_image` with `confirmCreditSpend: true` only after the user explicitly requested generation.
-5. If a long generation returns `processing`, poll `flow_job_status`.
-6. A timed-out job becomes `ready` when its asset is detected. Call `flow_upscale_video` if still needed, then `flow_download_job`.
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "node",
+      "args": ["/absolute/path/to/google-flow-mcp/dist/index.js"]
+    }
+  }
+}
+```
 
-Example video request:
+## Example agent requests
+
+Once the account is connected, users can speak normally:
+
+> Inspect my Flow account and tell me exactly which image models, video models, ratios, durations, output counts, and upscales are available.
+
+> Use Omni Flash to create one 16:9 video of a translucent glass jellyfish floating through a rainy neon city. Download it into `public/generated/flow`. Do not upscale it.
+
+> Generate a vertical image with Nano Banana 2 Lite using the attached reference image and save it for my Remotion project.
+
+> Upscale the last video to the highest resolution my account actually offers. Do not choose an unavailable or upgrade-only option.
+
+The expected agent workflow is:
+
+1. `flow_list_accounts`
+2. `flow_connect_account` when necessary
+3. `flow_inspect_account` immediately before generation
+4. `flow_generate_video` or `flow_generate_image` after explicit authorization
+5. `flow_job_status` for long-running work
+6. `flow_upscale_video` when requested
+7. `flow_download_job` for a ready asset that has not yet been downloaded
+
+Example video tool input:
 
 ```json
 {
@@ -146,7 +258,7 @@ Example video request:
   "aspectRatio": "16:9",
   "outputs": 1,
   "referenceFiles": [],
-  "upscale": "1080p",
+  "upscale": "none",
   "outputDirectory": "C:\\projects\\my-remotion-video\\public\\generated\\flow",
   "download": true,
   "timeoutSeconds": 600,
@@ -154,44 +266,44 @@ Example video request:
 }
 ```
 
-For Remotion, saving under `public/generated/flow` lets compositions use a returned file with `staticFile("generated/flow/<file>.mp4")`.
+For Remotion, files saved under `public/generated/flow` can be loaded with `staticFile("generated/flow/<file>.mp4")`.
 
-## Upscaling behavior
+## Upscaling
 
-Upscaling is treated as a live Flow asset/download action, not a guessed resolution conversion:
+Upscaling is a real Flow asset action, not local interpolation:
 
-1. The server opens the generated video's context menu using the same right-click interaction available to the user.
-2. It reads each numeric factor or resolution structurally, independently of translated surrounding text.
-3. The capability response distinguishes preview, original, upscale, and unavailable/upgrade-only options. For example, an account can report original `720p`, available upscale `1080p`, and unavailable `4k`.
-4. An exact request such as `2x` or `1080p` fails if that exact ID is not offered and available.
-5. `highest_available` ranks only available choices present in that menu.
-6. Flow may return a direct upscaled download or create another processing asset; both paths remain captured by the persistent job.
+1. The MCP opens the generated asset's context menu.
+2. It reads factor or resolution choices structurally, independently of translated surrounding text.
+3. It distinguishes previews, originals, available upscales, and disabled/upgrade-only choices.
+4. Exact requests such as `2x` or `1080p` fail if that exact option is unavailable.
+5. `highest_available` ranks only options Flow currently offers.
+6. The MCP captures either the direct upscaled download or a newly processing asset.
 
-The server does not use local interpolation or an unrelated upscaler when Flow lacks the requested option.
+The MCP never invents `4x`, silently downgrades a request, or substitutes an unrelated local upscaler.
 
-## Multiple accounts
-
-Call `flow_connect_account` again and click a different existing Google account to create another isolated Flow session. Use stable local IDs such as `personal`, `studio`, or `backup`; omit the ID to let the server create one. Email addresses and Google credentials are never required by MCP tools.
-
-Operations for one account are serialized to prevent two agents from changing the same Flow page simultaneously. Separate accounts use separate Chrome contexts and can progress independently.
-
-## Tools
+## MCP tools
 
 | Tool | Purpose | Spends credits |
-| --- | --- | --- |
-| `flow_list_accounts` | List local profiles | No |
-| `flow_login_bridge_status` | Check whether the localhost bridge is running/waiting | No |
-| `flow_connect_account` | Import an existing Chromium Google session and choose an account | No |
-| `flow_inspect_account` | Inspect login/UI controls and save a screenshot | No |
+| --- | --- | ---: |
+| `flow_list_accounts` | List locally configured account profiles | No |
+| `flow_login_bridge_status` | Check the localhost login bridge | No |
+| `flow_connect_account` | Connect an existing Chromium Google session | No |
+| `flow_inspect_account` | Return the live normalized capability map | No |
 | `flow_generate_video` | Generate, optionally upscale, and download video | Yes |
-| `flow_generate_image` | Generate/edit and download image | Potentially |
+| `flow_generate_image` | Generate/edit and download an image | Potentially |
 | `flow_job_status` | Poll a persistent job | No |
-| `flow_upscale_video` | Upscale an existing video job | Potentially |
+| `flow_upscale_video` | Request an exact live upscale option | Potentially |
 | `flow_download_job` | Download an already-created asset | No new generation |
 
-## Diagnostics
+Every tool includes MCP-visible parameter descriptions so the agent knows how to use the live IDs returned by `flow_inspect_account`.
 
-Diagnostics and job state live under the application-data directory:
+## Runtime data and diagnostics
+
+Runtime state stays outside the repository by default:
+
+- Windows: `%LOCALAPPDATA%\flow-mcp`
+- macOS: `~/Library/Application Support/flow-mcp`
+- Linux: `$XDG_DATA_HOME/flow-mcp` or `~/.local/share/flow-mcp`
 
 ```text
 flow-mcp/
@@ -201,30 +313,47 @@ flow-mcp/
   diagnostics/*.png
 ```
 
-On a `ui_changed` error, open the returned screenshot and update the structural role/material-icon selectors in `src/flow-adapter.ts`. Avoid translated wording and hashed class names.
+Override the location with `FLOW_MCP_DATA_DIR`. Never commit that directory. If Flow changes its UI, errors include a diagnostic screenshot where possible; selectors intentionally prefer semantic roles and stable Material Symbols over translated text or hashed CSS classes.
 
-## Limitations and responsible use
+## Security
 
-- This is browser automation, not an official Flow API.
-- It can break when Google changes Flow's interface.
-- It does not bypass CAPTCHA, verification, quotas, regional availability, safety filters, or access controls.
-- The bridge extension has powerful access to Google session cookies. Install only the copy shipped with this repository, review its small source, and never paste or transmit its data elsewhere.
-- A browser-session connection can expire or be revoked by Google; click Connect Flow again to refresh it from the normal browser.
-- Keep the browser headed for first-time authentication and troubleshooting.
-- Generated output, watermarks, credit costs, and model availability depend on the Google account, plan, region, and current Flow product behavior.
-- You are responsible for complying with Google's terms and policies.
+- The login bridge binds only to `127.0.0.1` on a small fixed port range.
+- Normal web origins are rejected; extension requests and cookie payloads are validated.
+- Only Google-domain cookies are accepted.
+- Session-transfer payloads are held in memory briefly and are never sent to a remote service by this project.
+- Passwords and 2FA codes are never accessed.
+- Generation and upscale tools require an explicit credit-spend confirmation argument.
+- CAPTCHA, verification, regional restrictions, quotas, safety filters, and access controls are not bypassed.
+
+The extension necessarily has powerful access to Google cookies. Install only a reviewed copy from this repository. See [SECURITY.md](SECURITY.md) for the threat model and responsible disclosure process.
+
+## Project status
+
+**Alpha.** The core workflow has been live-tested with an existing Chromium account, a Spanish Flow interface, live model/ratio/upscale discovery, one real Omni Flash generation, persistent polling, browser download capture, and FFprobe validation.
+
+Google Flow does not provide a stable public browser-automation contract. UI changes can break selectors even with structural discovery and defensive failure behavior. Live Google-account tests are intentionally excluded from CI because they would require private sessions and spend credits.
+
+Current priorities:
+
+- Publish the login bridge through a browser extension store
+- Split the large Flow adapter into smaller capability, generation, and asset modules
+- Expand opt-in live tests for images, references, upscaling, and multiple accounts
+- Add macOS/Linux onboarding helpers
 
 ## Development
 
 ```powershell
+npm ci
 npm run typecheck
 npm test
-npm run build
 npm run check
+npm pack --dry-run
 ```
 
-CI runs on Windows and Linux with Node 20 and Node 24. Live Google account tests are intentionally excluded from CI.
+CI runs the full check suite on Windows and Linux with Node.js 20 and 24. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## License
+## License and disclaimer
 
-MIT. This repository is a clean-room implementation and contains no Proxima source code.
+[MIT](LICENSE). This is an independent, clean-room project. It is not affiliated with, endorsed by, or supported by Google. Google Flow, Gemini, Veo, Nano Banana, Omni, Chromium, Codex, Antigravity, and Remotion are trademarks or products of their respective owners.
+
+Use this project in accordance with Google's terms and all applicable policies.
