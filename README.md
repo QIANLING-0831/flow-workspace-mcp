@@ -207,14 +207,22 @@ Open a new Codex task after changing MCP configuration. This does not restart Ch
 
 ### Google Antigravity
 
-Antigravity 2.0, Antigravity IDE, and Antigravity CLI support custom MCP servers. Open **MCP Servers → Manage MCP Servers → View raw config**, or edit the shared `~/.gemini/config/mcp_config.json`, and add:
+Antigravity 2.0, Antigravity IDE, and Antigravity CLI support custom MCP servers. Install the repository in a stable directory—not under Antigravity's `scratch` directory, which may be deleted automatically. A Windows example:
+
+```powershell
+git clone https://github.com/retrolyze52/google-flow-mcp.git "$env:LOCALAPPDATA\google-flow-mcp"
+npm ci --prefix "$env:LOCALAPPDATA\google-flow-mcp"
+npm run build --prefix "$env:LOCALAPPDATA\google-flow-mcp"
+```
+
+Open **MCP Servers → Manage MCP Servers → View raw config**, or edit the shared `~/.gemini/config/mcp_config.json`, and add the stable entrypoint:
 
 ```json
 {
   "mcpServers": {
     "google-flow": {
       "command": "node",
-      "args": ["C:\\absolute\\path\\to\\google-flow-mcp\\dist\\index.js"],
+      "args": ["C:\\Users\\YOUR_NAME\\AppData\\Local\\google-flow-mcp\\dist\\index.js"],
       "env": {
         "FLOW_MCP_HEADLESS": "0"
       }
@@ -223,7 +231,7 @@ Antigravity 2.0, Antigravity IDE, and Antigravity CLI support custom MCP servers
 }
 ```
 
-Then open **Settings → Customizations → Installed MCP Servers** and click **Refresh**. In Antigravity CLI, use `/mcp` to inspect the server and its tools. See Google's [Antigravity MCP configuration guide](https://codelabs.developers.google.com/google-workspace-mcp-antigravity).
+Then open **Settings → Customizations → Installed MCP Servers** and click **Refresh** so Antigravity reloads the server instructions and tool schemas. This refresh does not restart Chromium or lose connected Flow accounts. In Antigravity CLI, use `/mcp` to inspect the server and its tools. See Google's [Antigravity MCP configuration guide](https://codelabs.developers.google.com/google-workspace-mcp-antigravity).
 
 ### Other stdio MCP clients
 

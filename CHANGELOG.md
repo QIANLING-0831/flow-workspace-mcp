@@ -14,6 +14,7 @@ All notable changes to Google Flow MCP are documented here.
 - Allows account IDs to be omitted so agents use the verified default instead of guessing
 - Added explicit agent next-action guidance to account and capability responses
 - Added regression coverage for landing-page classification, verified defaults, unavailable accounts, MCP server instructions, and generation tool schemas
+- Documented a stable Antigravity installation path so MCP entrypoints are not lost when its scratch directory is cleaned
 
 ## [0.1.0] - 2026-07-19
 
