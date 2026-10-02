@@ -65,6 +65,12 @@ test("confirmed credit-failed jobs reroute once and preserve their replacement l
   assert.equal(attempts, 1);
 });
 
+test("ambiguous live credit/daily-limit reply cannot borrow old no-charge confirmation", () => {
+  const prompt = "new regression robot shot";
+  const body = `Failed\nYou have not been charged for this generation.\nold prompt\n${prompt}\nFailed\nSomething went wrong. Please try again.\nI couldn't generate that video because you've reached your credit or daily limit.`;
+  assert.equal(confirmedCreditRejection(body, prompt), false);
+});
+
 test("routing falls back only before submission on typed credit insufficiency", async (context) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "flow-switch-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
