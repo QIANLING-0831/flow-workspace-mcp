@@ -174,7 +174,7 @@ export class BrowserManager {
       const page = context.pages().find((candidate) => isFlowPageUrl(candidate.url()))
         ?? context.pages()[0]
         ?? (await context.newPage());
-      this.preparePage(page);
+      await this.preparePage(page);
       this.browsers.set(accountId, { context, page, close: async () => undefined });
       return page;
     } catch {
@@ -219,7 +219,7 @@ export class BrowserManager {
         if (!context) throw new FlowError("browser_error", `No browser context was exposed at ${account.cdpUrl}.`);
         const page = context.pages().find((candidate) => isFlowPageUrl(candidate.url()))
           ?? (await context.newPage());
-        this.preparePage(page);
+        await this.preparePage(page);
         this.browsers.set(accountId, { context, page, close: async () => undefined });
         return page;
       }
@@ -243,6 +243,7 @@ export class BrowserManager {
         "--profile-directory=Default",
         "--no-first-run",
         "--no-default-browser-check",
+        "--window-size=1920,1080",
         ...(process.env.FLOW_MCP_HEADLESS === "1" || account.headlessAfterLogin ? ["--headless=new"] : []),
         `--app=${account.lastWorkspaceUrl && isFlowPageUrl(account.lastWorkspaceUrl) ? account.lastWorkspaceUrl : FLOW_URL}`,
       ];
@@ -266,7 +267,7 @@ export class BrowserManager {
       const page = context.pages().find((candidate) => isFlowPageUrl(candidate.url()))
         ?? context.pages()[0]
         ?? (await context.newPage());
-      this.preparePage(page);
+      await this.preparePage(page);
       const session: SharedBrowserSession = { endpoint, ownerPid: process.pid, createdAt: new Date().toISOString() };
       await writeFile(this.sessionFile(accountId), `${JSON.stringify(session, null, 2)}\n`, "utf8");
       this.browsers.set(accountId, {
@@ -367,7 +368,10 @@ export class BrowserManager {
     this.browsers.clear();
   }
 
-  private preparePage(page: Page): void {
+  private async preparePage(page: Page): Promise<void> {
+    // Flow hides its Agent desktop controls at the default headless/mobile width.
+    // Set the viewport on both new and reattached pages, not only at launch.
+    await page.setViewportSize({ width: 1920, height: 1080 });
     page.setDefaultTimeout(10_000);
     page.setDefaultNavigationTimeout(45_000);
   }
