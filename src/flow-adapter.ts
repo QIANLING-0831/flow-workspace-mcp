@@ -425,6 +425,10 @@ export class FlowAdapter {
             : request.outputs === 1 ? "Create exactly one image" : `Create exactly ${request.outputs} images`}: ${request.prompt}`,
         );
 
+        const creditWarning = page.getByRole("button", { name: /^Insufficient credits warning$/i });
+        if (await creditWarning.isVisible().catch(() => false)) {
+          throw new FlowError("insufficient_credits", "Flow reports insufficient credits for the configured request before submission.");
+        }
         const baselineSnapshots = await this.stableMediaBaseline(page, request.mediaType);
         const baseline = baselineSnapshots.length;
         const baselineMediaKeys = flattenMediaKeys(baselineSnapshots);
@@ -445,10 +449,6 @@ export class FlowAdapter {
           job,
         );
 
-        const creditWarning = page.getByRole("button", { name: /^Insufficient credits warning$/i });
-        if (await creditWarning.isVisible().catch(() => false)) {
-          throw new FlowError("insufficient_credits", "Flow reports insufficient credits for the configured request before submission.");
-        }
         if (job.status === "completed") return job;
         if (!generated) return job;
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });

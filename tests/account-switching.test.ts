@@ -103,3 +103,32 @@ test("real generation preflight treats zero as exhausted but unknown as unknown"
   await assert.rejects(seam.generateOnAccount(request, true), (error) => error instanceof FlowError && error.code === "browser_error");
   assert.equal(opened, 1, "unknown balance does not reject as exhausted");
 });
+
+test("credit warning is checked before submission and never after an accepted job", async (context) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "flow-warning-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new FlowStore(directory);
+  await store.ensureAccount("a");
+  await store.markAccountConnected("a");
+  const browsers = new BrowserManager(store);
+  context.mock.method(browsers, "runExclusive", async (_id: string, operation: () => Promise<unknown>) => operation());
+  const adapter = new FlowAdapter(store, browsers, new CookieBridge());
+  let warning = true;
+  let submitted = 0;
+  const page = { url: () => "https://flow.google.com/project/test", getByRole: () => ({ isVisible: async () => warning }) };
+  const seam = adapter as unknown as Record<string, (...args: any[]) => Promise<any>>;
+  context.mock.method(seam, "readyPage", async () => page);
+  for (const method of ["openProject", "ensureAgentAutoApprove", "configureGeneration", "attachReferences", "fillPrompt", "captureDiagnostic"]) {
+    context.mock.method(seam, method, async () => undefined);
+  }
+  context.mock.method(seam, "stableMediaBaseline", async () => []);
+  context.mock.method(seam, "clickGenerate", async () => { submitted++; warning = true; });
+  context.mock.method(seam, "waitForNewMedia", async () => undefined);
+  const request: GenerationRequest = { accountId: "a", mediaType: "video", prompt: "shot", outputs: 1, referenceFiles: [], upscale: "none", outputDirectory: directory, download: false, timeoutSeconds: 15 };
+  await assert.rejects(adapter.generate(request), /No selected account can fund/);
+  assert.equal(submitted, 0);
+  warning = false;
+  const job = await adapter.generate(request);
+  assert.equal(submitted, 1);
+  assert.equal(job.status, "processing", "a post-submission warning cannot reroute a queued job");
+});

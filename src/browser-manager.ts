@@ -95,8 +95,24 @@ async function waitForCdp(endpoint: string, process: ChildProcess, timeoutMs = 2
   throw new Error(`Chromium did not expose CDP at ${endpoint} within ${timeoutMs / 1_000} seconds.`);
 }
 
-async function closeManagedBrowser(browser: Browser, process: ChildProcess): Promise<void> {
+export async function closeManagedBrowser(browser: Browser, process: ChildProcess, exitTimeoutMs = 5_000): Promise<void> {
+  // CDP browser.close() only disconnects Playwright. Ask Chrome to exit cleanly
+  // so freshly authenticated cookies are flushed before using kill as fallback.
+  try {
+    const session = await browser.newBrowserCDPSession();
+    await session.send("Browser.close");
+  } catch {
+    // Chrome may close the transport while acknowledging Browser.close.
+  }
   await browser.close().catch(() => undefined);
+  if (process.exitCode === null && !process.killed) {
+    await new Promise<void>((resolve) => {
+      const finish = () => { clearTimeout(timer); process.off("exit", finish); resolve(); };
+      const timer = setTimeout(finish, exitTimeoutMs);
+      process.once("exit", finish);
+      if (process.exitCode !== null) finish();
+    });
+  }
   if (process.exitCode === null && !process.killed) process.kill();
 }
 
