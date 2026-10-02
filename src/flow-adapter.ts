@@ -300,16 +300,18 @@ export class FlowAdapter {
       const screenshot = this.store.diagnosticPath(`inspect-${account.id}`);
       await page.screenshot({ path: screenshot, fullPage: false });
       const diagnosticControls = this.store.diagnosticPath(`controls-${account.id}`, "json");
-      const controls = await page.locator('button, input, textarea, [contenteditable], [role]').evaluateAll((elements) => elements
+      const controls = await page.locator('button, input, textarea, img, video, [data-media-id], [contenteditable], [role]').evaluateAll((elements) => elements
         .filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0)
         .slice(0, 250)
         .map((element) => ({
           tag: element.tagName.toLowerCase(),
           text: element.matches('button, [role="option"], [role^="menuitem"]') ? (element.textContent ?? "").trim().slice(0, 300) : "",
           attributes: Object.fromEntries([...element.attributes]
-            .filter((attribute) => /^(?:role|type|contenteditable|aria-.+|data-state|data-placeholder|placeholder|class)$/.test(attribute.name))
+            .filter((attribute) => /^(?:role|type|contenteditable|aria-.+|data-state|data-media-id|data-placeholder|placeholder|class)$/.test(attribute.name))
             .map((attribute) => [attribute.name, attribute.value])),
           parentRole: element.parentElement?.getAttribute("role"),
+          parentTag: element.parentElement?.tagName.toLowerCase(),
+          parentClass: element.parentElement?.getAttribute("class"),
           parentText: element.matches('button') ? (element.parentElement?.textContent ?? "").trim().slice(0, 500) : "",
         })));
       await writeFile(diagnosticControls, JSON.stringify(controls, null, 2), "utf8");
@@ -383,7 +385,9 @@ export class FlowAdapter {
           baselineMediaKeys,
           request.outputs,
           Math.min(request.timeoutSeconds, 20),
+          job,
         );
+        if (job.status === "completed") return job;
         if (!generated) return job;
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
         return await this.finalizeReadyJob(page, job, Math.min(request.timeoutSeconds, 20));
@@ -419,7 +423,8 @@ export class FlowAdapter {
       if (!job.baselineMediaKeys) {
         throw new FlowError("job_asset_identity_missing", "This job predates exact asset tracking and cannot be refreshed safely. Generate it again with the current MCP version.");
       }
-      const generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds);
+      const generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds, job);
+      if (job.status === "completed") return job;
       if (generated && job.status === "processing") {
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
         return await this.finalizeReadyJob(page, job, timeoutSeconds);
@@ -989,7 +994,7 @@ export class FlowAdapter {
     await button.click();
     await page.waitForTimeout(500);
     if (agentUi) {
-      const deadline = Date.now() + 120_000;
+      const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
         const checks = await visibleCount(checkIcons);
         const preferredApproval = preferredPersistentApprovalIndex(approvalBaseline, checks);
@@ -1006,7 +1011,8 @@ export class FlowAdapter {
         if (FAILURE_TEXT.test(body)) throw new FlowError("generation_failed", "Flow reported that generation could not start.");
         await page.waitForTimeout(1_000);
       }
-      throw new FlowError("ui_changed", "Flow Agent did not expose a credit confirmation or begin generation within 120 seconds.");
+      // A queued submission need not mount a playable video yet. Poll the same job.
+      return;
     }
     const dialog = await firstVisible([page.locator('[role="dialog"]')]);
     if (dialog) {
@@ -1019,12 +1025,12 @@ export class FlowAdapter {
   }
 
   private mediaLocator(page: Page, type: MediaType): Locator {
-    if (type === "video") return page.locator("video");
+    if (type === "video") return page.locator("video, img.video-thumbnail");
     return page.locator("img");
   }
 
   private async mediaSnapshots(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
-    const snapshots = await this.mediaLocator(page, type).evaluateAll((elements) => elements.map((element, index) => {
+    const snapshots = await this.mediaLocator(page, type).evaluateAll((elements, mediaType) => elements.map((element, index) => {
       const keys: string[] = [];
       let sourceUrl: string | undefined;
       const addUrl = (raw: string | null | undefined) => {
@@ -1081,9 +1087,9 @@ export class FlowAdapter {
 
       const ready = element instanceof HTMLVideoElement
         ? element.readyState >= 1 && Number.isFinite(element.duration) && element.duration > 0
-        : element instanceof HTMLImageElement && element.complete && element.naturalWidth >= 256;
+        : mediaType === "image" && element instanceof HTMLImageElement && element.complete && element.naturalWidth >= 256;
       return { index, keys: [...new Set(keys)], ready, ...(sourceUrl ? { sourceUrl } : {}) };
-    }));
+    }), type);
     return uniqueMediaSources(snapshots);
   }
 
@@ -1108,8 +1114,10 @@ export class FlowAdapter {
     baselineKeys: string[],
     expectedCount: number,
     timeoutSeconds: number,
+    job?: FlowJob,
   ): Promise<MediaSnapshot[] | null> {
     const deadline = Date.now() + timeoutSeconds * 1_000;
+    const openedPreviews = new Set<string>();
     while (Date.now() < deadline) {
       const body = (await page.locator("body").innerText().catch(() => "")).slice(-10_000);
       if (FAILURE_TEXT.test(body)) {
@@ -1125,6 +1133,41 @@ export class FlowAdapter {
         }
       }).catch(() => undefined);
       const candidates = selectNewMedia(await this.mediaSnapshots(page, type), baselineKeys);
+      if (type === "video" && await page.locator("video").count() === 0) {
+        const preview = candidates.find((candidate) => candidate.sourceUrl && !openedPreviews.has(candidate.sourceUrl));
+        if (preview) {
+          const thumbnail = media.nth(preview.index);
+          const trigger = thumbnail.locator("xpath=ancestor::*[@role='button'][1]");
+          if (await trigger.isVisible().catch(() => false)) {
+            openedPreviews.add(preview.sourceUrl!);
+            await trigger.click();
+            await page.waitForTimeout(1_500);
+            if (job?.downloadRequested && job.outputs === 1 && job.flowProjectUrl
+              && page.url().startsWith(`${canonicalFlowProjectUrl(job.flowProjectUrl)}/`)) {
+              const editorDownload = page.locator("button").filter({ has: page.locator(SYMBOL_SELECTOR, { hasText: /^download$/ }) });
+              await editorDownload.first().waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
+              const downloadButton = await firstVisible([
+                editorDownload,
+              ]);
+              if (downloadButton && await downloadButton.isEnabled()) {
+                const pendingDownload = page.waitForEvent("download", { timeout: 30_000 }).catch(() => null);
+                await downloadButton.click();
+                const original = await firstVisible([
+                  page.locator(MENU_OPTION_SELECTOR).filter({ hasText: /\bOriginal size\b|原始尺寸|Tamaño original/i }),
+                ]);
+                if (original && await original.isEnabled()) await original.click();
+                const download = await pendingDownload;
+                if (download) {
+                  await this.store.updateJob(job, "downloading", { generatedAssets: identitiesFor([preview]) });
+                  await this.saveCapturedDownload(job, download, "original");
+                  return [];
+                }
+              }
+            }
+            continue;
+          }
+        }
+      }
       const readiness = await Promise.all(candidates.map(async (candidate) => ({
         candidate,
         ready: candidate.ready || await this.isMediaSourceReady(page, candidate, type),
@@ -1369,6 +1412,9 @@ export class FlowAdapter {
     );
     await download.saveAs(destination);
     const probe = await probeMedia(destination);
+    if (job.mediaType === "video" && probe.ffprobeAvailable && !(probe.durationSeconds && probe.width && probe.height)) {
+      throw new FlowError("download_failed", "The captured download did not decode as a video with positive duration and dimensions.");
+    }
     const completed = await this.store.updateJob(job, "completed", {
       downloadedFiles: [...(job.downloadedFiles ?? []), destination],
       mediaProbe: [...(job.mediaProbe ?? []), probe],
