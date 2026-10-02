@@ -13,6 +13,10 @@ test("Flow navigation recognizes current and legacy origins without accepting lo
 
 test("asset editor URLs return to their language-preserving project workspace", () => {
   assert.equal(
+    canonicalFlowProjectUrl("https://flow.google.com/project/project-1/edit/asset-2?view=full#clip"),
+    "https://flow.google.com/project/project-1",
+  );
+  assert.equal(
     canonicalFlowProjectUrl("https://labs.google/fx/es/tools/flow/project/project-1/edit/asset-2?view=full#clip"),
     "https://labs.google/fx/es/tools/flow/project/project-1",
   );

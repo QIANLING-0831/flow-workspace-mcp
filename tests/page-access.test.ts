@@ -54,3 +54,10 @@ test("a lookalike origin cannot establish workspace access", async () => {
   const ui = adapter as unknown as { hasWorkspace: (page: Page) => Promise<boolean> };
   assert.equal(await ui.hasWorkspace(page), false);
 });
+
+test("a current-origin project URL establishes workspace access without legacy controls", async () => {
+  const page = { url: () => "https://flow.google.com/project/test-project" } as Page;
+  const adapter = new FlowAdapter(undefined!, undefined!, undefined!);
+  const ui = adapter as unknown as { hasWorkspace: (page: Page) => Promise<boolean> };
+  assert.equal(await ui.hasWorkspace(page), true);
+});
