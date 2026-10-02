@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FlowError } from "./errors.js";
 import { validateAccountId } from "./paths.js";
+import { isFlowPageUrl } from "./navigation.js";
 import type { AccountConnectionStatus, AccountOptions, AccountRecord, AccountsFile, FlowJob, GenerationRequest, JobStatus } from "./types.js";
 
 function platformDataDir(): string {
@@ -185,12 +186,14 @@ export class FlowStore {
     );
   }
 
-  async touchAccount(accountId: string): Promise<void> {
+  async touchAccount(accountId: string, workspaceUrl?: string): Promise<void> {
+    if (workspaceUrl && !isFlowPageUrl(workspaceUrl)) throw new FlowError("validation_error", "Only a trusted Flow workspace URL can be remembered.");
     await this.withAccountsLock(async () => {
       const file = await this.listAccounts();
       const account = file.accounts.find((item) => item.id === accountId);
       if (!account) return;
       account.lastOpenedAt = new Date().toISOString();
+      if (workspaceUrl) account.lastWorkspaceUrl = workspaceUrl;
       await atomicWriteJson(this.accountsFile, file);
     });
   }

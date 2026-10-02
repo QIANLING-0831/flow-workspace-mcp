@@ -1,4 +1,6 @@
-# Google Flow MCP — mandatory installer contract
+# Flow Workspace MCP — installer and development contract
+
+Development requests may authorize scoped source changes; the unmodified-source rules below apply to installation only. Preserve MIT attribution and history. Before publishing run npm run check and npm pack --dry-run. Never commit sessions, profiles, diagnostics, account registries, signed media URLs or personal media. Keep live verification status explicit: passing unit tests is not end-to-end generation verification.
 
 These instructions apply to any agent asked to install or configure this repository.
 

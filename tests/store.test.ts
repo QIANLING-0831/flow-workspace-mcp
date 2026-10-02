@@ -5,6 +5,18 @@ import path from "node:path";
 import test from "node:test";
 import { FlowStore } from "../src/store.js";
 
+test("saved workspace survives restart without accepting external redirect targets", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-workspace-"));
+  context.after(async () => rm(temporary, { recursive: true, force: true }));
+  const store = new FlowStore(temporary);
+  await store.ensureAccount("personal");
+  const url = "https://flow.google.com/project/test";
+  await store.touchAccount("personal", url);
+  assert.equal((await new FlowStore(temporary).requireAccount("personal")).lastWorkspaceUrl, url);
+  await assert.rejects(store.touchAccount("personal", "https://evil.example/"), /trusted Flow/);
+  assert.equal((await store.requireAccount("personal")).lastWorkspaceUrl, url);
+});
+
 test("only verified accounts become the default and the latest connection wins", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "flow-mcp-store-"));
   context.after(async () => rm(temporary, { recursive: true, force: true }));

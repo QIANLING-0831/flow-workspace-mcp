@@ -21,8 +21,8 @@ const flow = new FlowAdapter(store, browsers, cookieBridge);
 const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.url));
 
 const server = new McpServer({
-  name: "flow-mcp",
-  version: "0.2.3",
+  name: "flow-workspace-mcp",
+  version: "0.1.0",
   description: "Automates Google Flow through user-owned, persistent Chromium sessions and saves generated media locally.",
 }, {
   instructions: FLOW_AGENT_INSTRUCTIONS,

@@ -20,6 +20,7 @@ export interface AccountRecord {
   label: string;
   createdAt: string;
   lastOpenedAt?: string;
+  lastWorkspaceUrl?: string;
   browserMode?: "managed" | "extension" | "attach_cdp";
   cdpUrl?: string;
   browserExecutablePath?: string;
@@ -145,6 +146,7 @@ export interface UiCapabilities {
   upscaleOptions?: UpscaleOption[];
   pageTextExcerpt: string;
   screenshot?: string;
+  diagnosticControls?: string;
 }
 
 export interface UpscaleOption {

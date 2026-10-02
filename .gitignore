@@ -7,6 +7,18 @@ coverage/
 
 # Runtime state belongs outside the repository, but ignore it if explicitly redirected here.
 .flow-mcp-data/
+profiles/
+browser-sessions/
+diagnostics/
+jobs/
+accounts.json
+cookies*.json
+storage-state*.json
+*.mp4
+*.webm
+*.wav
+*.mp3
+renders/
 
 # Editor / OS files
 .DS_Store

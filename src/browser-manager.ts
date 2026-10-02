@@ -228,7 +228,7 @@ export class BrowserManager {
         "--no-first-run",
         "--no-default-browser-check",
         ...(process.env.FLOW_MCP_HEADLESS === "1" || account.headlessAfterLogin ? ["--headless=new"] : []),
-        `--app=${FLOW_URL}`,
+        `--app=${account.lastWorkspaceUrl && isFlowPageUrl(account.lastWorkspaceUrl) ? account.lastWorkspaceUrl : FLOW_URL}`,
       ];
       const processHandle = spawn(executablePath, args, {
         stdio: "ignore",

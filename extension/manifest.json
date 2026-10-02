@@ -3,7 +3,7 @@
   "name": "Flow Login Bridge",
   "version": "0.1.0",
   "description": "Connect Google accounts already signed into Chromium to your local Flow MCP server.",
-  "homepage_url": "https://github.com/retrolyze52/google-flow-mcp",
+  "homepage_url": "https://github.com/QIANLING-0831/flow-workspace-mcp",
   "permissions": ["cookies"],
   "host_permissions": [
     "https://google.com/*",

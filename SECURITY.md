@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Google Flow MCP is currently an alpha release. Security fixes are applied to the latest commit on `main`.
+Flow Workspace MCP is currently an alpha release. Security fixes are applied to the latest commit on `main`.
 
 ## Reporting a vulnerability
 

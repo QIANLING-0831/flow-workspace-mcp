@@ -1,7 +1,7 @@
 {
-  "name": "google-flow-mcp",
-  "version": "0.2.3",
-  "description": "MCP server for Google Flow video and image generation with live capability discovery, multi-account Chromium login, upscaling, and validated local downloads—no generation API key.",
+  "name": "flow-workspace-mcp",
+  "version": "0.1.0",
+  "description": "Persistent Google Flow workspace automation for repeatable video production: live settings, tracked jobs and verified local downloads.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -55,11 +55,11 @@
   "author": "retrolyze52",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/retrolyze52/google-flow-mcp.git"
+    "url": "git+https://github.com/QIANLING-0831/flow-workspace-mcp.git"
   },
-  "homepage": "https://github.com/retrolyze52/google-flow-mcp#readme",
+  "homepage": "https://github.com/QIANLING-0831/flow-workspace-mcp#readme",
   "bugs": {
-    "url": "https://github.com/retrolyze52/google-flow-mcp/issues"
+    "url": "https://github.com/QIANLING-0831/flow-workspace-mcp/issues"
   },
   "license": "MIT",
   "dependencies": {

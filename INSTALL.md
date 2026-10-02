@@ -1,4 +1,4 @@
-# Install Google Flow MCP
+# Install Flow Workspace MCP
 
 This is the supported installation and first-run procedure. Installer agents must follow it without modifying repository source.
 
@@ -21,15 +21,15 @@ Antigravity's official MCP documentation uses `~/.gemini/config/mcp_config.json`
 Windows PowerShell:
 
 ```powershell
-git clone https://github.com/retrolyze52/google-flow-mcp.git "$env:LOCALAPPDATA\google-flow-mcp"
-Set-Location "$env:LOCALAPPDATA\google-flow-mcp"
+git clone https://github.com/QIANLING-0831/flow-workspace-mcp.git "$env:LOCALAPPDATA\flow-workspace-mcp"
+Set-Location "$env:LOCALAPPDATA\flow-workspace-mcp"
 ```
 
 macOS/Linux:
 
 ```bash
-git clone https://github.com/retrolyze52/google-flow-mcp.git "$HOME/.local/share/google-flow-mcp"
-cd "$HOME/.local/share/google-flow-mcp"
+git clone https://github.com/QIANLING-0831/flow-workspace-mcp.git "$HOME/.local/share/flow-workspace-mcp"
+cd "$HOME/.local/share/flow-workspace-mcp"
 ```
 
 ### 2. Run the supported installer
@@ -70,7 +70,7 @@ In the normal Chromium browser where your Google accounts are already signed in:
 4. Click **Load unpacked**.
 5. Select the `extensionDirectory` printed by the installer, for example:
 
-   `C:\Users\YOU\AppData\Local\google-flow-mcp\extension`
+   `C:\Users\YOU\AppData\Local\flow-workspace-mcp\extension`
 
 6. Pin **Flow Login Bridge** so it is easy to open.
 
