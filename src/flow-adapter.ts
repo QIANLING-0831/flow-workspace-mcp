@@ -155,7 +155,6 @@ export class FlowAdapter {
       let access = chooserCompleted
         ? await this.pageAccessState(page)
         : { signedIn: false, workspaceAvailable: false, pageKind: "signed_out" as const };
-      let noWorkspaceSince: number | undefined;
       while (!access.workspaceAvailable && Date.now() < deadline) {
         await page.waitForTimeout(1_000);
         if (!chooserCompleted && /^https:\/\/myaccount\.google\.com(?:\/|$)/i.test(page.url())) {
@@ -163,15 +162,14 @@ export class FlowAdapter {
           await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
         }
         access = await this.pageAccessState(page);
-        if (chooserCompleted && access.signedIn && !access.workspaceAvailable) {
-          noWorkspaceSince ??= Date.now();
-          if (Date.now() - noWorkspaceSince >= 5_000) break;
-        } else {
-          noWorkspaceSince = undefined;
-        }
       }
+      // A signed-in page can still be loading or awaiting user onboarding.
+      // Respect the requested connection timeout before declaring it unavailable.
+      const connectionDiagnostic = !access.workspaceAvailable && selectionWaitSeconds > 0
+        ? `Current URL: ${page.url()}. Screenshot: ${await this.captureDiagnostic(page, `connect-${account.id}`) ?? "unavailable"}.`
+        : "";
       if (!access.workspaceAvailable && access.signedIn) {
-        const message = `Google account '${account.id}' is signed in, but Flow opened its public landing page instead of the generation workspace.`;
+        const message = `Google account '${account.id}' is signed in, but no Flow generation workspace was detected within ${selectionWaitSeconds} seconds. ${connectionDiagnostic}`;
         await this.store.markAccountAccessUnavailable(account.id, message);
         if (!attached) await this.browsers.reset(account.id);
         throw new FlowError(
@@ -184,7 +182,7 @@ export class FlowAdapter {
         );
       }
       if (!access.workspaceAvailable && selectionWaitSeconds > 0) {
-        const message = `The existing Google session received from Chromium was not accepted by Flow within ${selectionWaitSeconds} seconds.`;
+        const message = `The existing Google session received from Chromium was not accepted by Flow within ${selectionWaitSeconds} seconds. ${connectionDiagnostic}`;
         await this.store.markAccountNeedsReconnect(account.id, message);
         if (!attached) await this.browsers.reset(account.id);
         throw new FlowError(
