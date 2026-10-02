@@ -104,6 +104,7 @@ export interface FlowJob {
   downloadRequested?: boolean;
   fileName?: string;
   downloadedFiles?: string[];
+  downloadTransport?: "http" | "ui";
   mediaProbe?: MediaProbe[];
   error?: string;
   diagnosticScreenshot?: string;

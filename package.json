@@ -21,7 +21,8 @@
     "SECURITY.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "SOURCE.md"
   ],
   "engines": {
     "node": ">=20"
@@ -52,7 +53,7 @@
     "playwright",
     "remotion"
   ],
-  "author": "retrolyze52",
+  "author": "QIANLING-0831",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/QIANLING-0831/flow-workspace-mcp.git"

@@ -1,6 +1,6 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { APIResponse, Download, Locator, Page } from "playwright";
+import { request as httpRequest, type APIResponse, type Download, type Locator, type Page } from "playwright";
 import { preferredPersistentApprovalIndex } from "./approval.js";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
@@ -8,6 +8,7 @@ import { CookieBridge } from "./cookie-bridge.js";
 import { confirmedCreditRejection, parseCreditBalance } from "./credits.js";
 import { FlowError } from "./errors.js";
 import { mediaExtension, probeMedia } from "./media.js";
+import { readOriginalVideo, trackedVideoId } from "./read-api.js";
 import {
   flattenMediaKeys,
   identitiesFor,
@@ -553,9 +554,11 @@ export class FlowAdapter {
   async downloadJob(jobId: string): Promise<FlowJob> {
     const job = await this.store.getJob(jobId);
     return this.browsers.runExclusive(job.accountId, async () => {
+      const sessionPage = await this.browsers.pageFor(job.accountId);
+      if (await this.tryDownloadOriginal(sessionPage, job)) return job;
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
       await this.store.updateJob(job, "downloading");
-      await this.downloadTracked(page, job);
+      await this.downloadTracked(page, job, false);
       return job;
     });
   }
@@ -1483,7 +1486,31 @@ export class FlowAdapter {
     return resolved;
   }
 
-  private async downloadTracked(page: Page, job: FlowJob): Promise<void> {
+  private async tryDownloadOriginal(page: Page, job: FlowJob): Promise<boolean> {
+    if (!trackedVideoId(job)) return false;
+    let body: Buffer | null;
+    const client = await httpRequest.newContext({ storageState: { cookies: await page.context().cookies(), origins: [] } });
+    try { body = await readOriginalVideo(client, job); }
+    catch { return false; } // Read-only failure: existing exact-identity UI path remains available.
+    finally { await client.dispose(); }
+    if (!body) return false;
+    await mkdir(job.outputDirectory, { recursive: true });
+    const stem = safeFileStem(job.fileName || job.prompt.slice(0, 60));
+    const destination = path.join(job.outputDirectory, `${stem}-${job.id.slice(0, 8)}-http-original.mp4`);
+    await writeFile(destination, body);
+    const probe = await probeMedia(destination);
+    if (probe.ffprobeAvailable && (!(probe.durationSeconds! > 0) || !(probe.width! > 0) || !(probe.height! > 0))) {
+      throw new FlowError("download_failed", "Flow HTTP original did not decode as a video.");
+    }
+    const completed = await this.store.updateJob(job, "completed", {
+      downloadedFiles: [destination], mediaProbe: [probe], downloadTransport: "http",
+    });
+    await this.writeManifest(completed);
+    return true;
+  }
+
+  private async downloadTracked(page: Page, job: FlowJob, useReadApi = true): Promise<void> {
+    if (useReadApi && await this.tryDownloadOriginal(page, job)) return;
     await mkdir(job.outputDirectory, { recursive: true });
     const tracked = this.resolveTrackedMedia(await this.mediaSnapshots(page, job.mediaType), job);
     const assetCount = tracked.length;
@@ -1540,6 +1567,7 @@ export class FlowAdapter {
     const completed = await this.store.updateJob(job, "completed", {
       downloadedFiles: downloaded,
       mediaProbe: probes,
+      downloadTransport: "ui",
     });
     await this.writeManifest(completed);
   }
