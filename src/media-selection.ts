@@ -7,6 +7,16 @@ export interface MediaSnapshot {
   sourceUrl?: string;
 }
 
+export function uniqueMediaSources(snapshots: MediaSnapshot[]): MediaSnapshot[] {
+  const seen = new Set<string>();
+  return snapshots.filter((snapshot) => {
+    if (!snapshot.sourceUrl) return true;
+    if (seen.has(snapshot.sourceUrl)) return false;
+    seen.add(snapshot.sourceUrl);
+    return true;
+  });
+}
+
 function overlaps(left: string[], right: ReadonlySet<string>): boolean {
   return left.some((key) => right.has(key));
 }

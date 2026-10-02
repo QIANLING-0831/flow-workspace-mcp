@@ -12,6 +12,7 @@ import {
   identitiesFor,
   resolveMediaIdentities,
   selectNewMedia,
+  uniqueMediaSources,
   type MediaSnapshot,
 } from "./media-selection.js";
 import { canonicalFlowProjectUrl, isFlowPageUrl } from "./navigation.js";
@@ -404,7 +405,7 @@ export class FlowAdapter {
     if (["completed", "failed", "needs_attention"].includes(job.status)) return job;
     return this.browsers.runExclusive(job.accountId, async () => {
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
-      if (job.status === "ready" && job.generatedAssets?.length) {
+      if (["ready", "downloading"].includes(job.status) && job.generatedAssets?.length) {
         return await this.finalizeReadyJob(page, job, timeoutSeconds);
       }
       if (job.upscaleSubmitted && job.upscaleBaselineMediaKeys?.length) {
@@ -1019,11 +1020,11 @@ export class FlowAdapter {
 
   private mediaLocator(page: Page, type: MediaType): Locator {
     if (type === "video") return page.locator("video");
-    return page.locator('img[src^="blob:"], img[src*="googleusercontent"], img[src*="ggpht"]');
+    return page.locator("img");
   }
 
   private async mediaSnapshots(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
-    return this.mediaLocator(page, type).evaluateAll((elements) => elements.map((element, index) => {
+    const snapshots = await this.mediaLocator(page, type).evaluateAll((elements) => elements.map((element, index) => {
       const keys: string[] = [];
       let sourceUrl: string | undefined;
       const addUrl = (raw: string | null | undefined) => {
@@ -1083,6 +1084,7 @@ export class FlowAdapter {
         : element instanceof HTMLImageElement && element.complete && element.naturalWidth >= 256;
       return { index, keys: [...new Set(keys)], ready, ...(sourceUrl ? { sourceUrl } : {}) };
     }));
+    return uniqueMediaSources(snapshots);
   }
 
   private async stableMediaBaseline(page: Page, type: MediaType): Promise<MediaSnapshot[]> {
@@ -1137,6 +1139,8 @@ export class FlowAdapter {
   }
 
   private async isMediaSourceReady(page: Page, candidate: MediaSnapshot, type: MediaType): Promise<boolean> {
+    // Images must pass decoded-dimension checks; HTTP success also includes avatars.
+    if (type === "image") return false;
     if (!candidate.sourceUrl || candidate.sourceUrl.startsWith("blob:")) return false;
     try {
       const response = await page.context().request.head(candidate.sourceUrl, { timeout: 8_000 });
