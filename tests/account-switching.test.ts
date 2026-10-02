@@ -8,7 +8,7 @@ import { FlowStore } from "../src/store.js";
 import { BrowserManager } from "../src/browser-manager.js";
 import { CookieBridge } from "../src/cookie-bridge.js";
 import { FlowError } from "../src/errors.js";
-import { parseCreditBalance } from "../src/credits.js";
+import { confirmedCreditRejection, parseCreditBalance } from "../src/credits.js";
 import type { FlowJob, GenerationRequest } from "../src/types.js";
 
 test("credit parser ignores daily promotional grants and preserves unknown", () => {
@@ -17,9 +17,52 @@ test("credit parser ignores daily promotional grants and preserves unknown", () 
   assert.equal(parseCreditBalance("剩余额度：7"), 7);
   assert.equal(parseCreditBalance("7 AI credits"), 7);
   assert.equal(parseCreditBalance("3 Google Flow credits\nCredits refresh daily at 2:27 AM"), 3);
+  assert.equal(parseCreditBalance("50 个 Google Flow 点数\n点数每天11:40 刷新"), 50);
   assert.equal(parseCreditBalance("Receive 50 additional Flow credits daily"), null);
   assert.equal(parseCreditBalance("Upgrade"), null);
   assert.equal(parseCreditBalance("Remaining credits: 10\n0 credits remaining"), null);
+});
+
+test("terminal credit rejection requires this prompt, failure, quota, and no-charge confirmation", () => {
+  const reply = "robot shot\nFailed\nYou've reached your credit limit. You won't be charged any credits for this failed attempt.";
+  assert.equal(confirmedCreditRejection(reply, "robot shot"), true);
+  assert.equal(confirmedCreditRejection(reply, "other shot"), false);
+  assert.equal(confirmedCreditRejection("Failed. Reached your credit limit. You won't be charged.\nrobot shot\nQueued", "robot shot"), false);
+  assert.equal(confirmedCreditRejection("robot shot\nFailed. Reached your credit limit.", "robot shot"), false);
+  assert.equal(confirmedCreditRejection("robot shot\nFailed. Policy blocked. You won't be charged.", "robot shot"), false);
+});
+
+test("confirmed credit-failed jobs reroute once and preserve their replacement link", async (context) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "flow-terminal-retry-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new FlowStore(directory);
+  for (const id of ["a", "b"]) {
+    await store.ensureAccount(id);
+    await store.markAccountConnected(id);
+  }
+  await store.configureAccountSwitching(["a", "b"]);
+  const request: GenerationRequest = { accountId: "a", mediaType: "video", prompt: "shot", model: "omni-1-1-flash", outputs: 1, referenceFiles: ["reference.png"], upscale: "none", outputDirectory: directory, download: false, timeoutSeconds: 15 };
+  const original = await store.updateJob(await store.createJob(request), "failed", { creditFailureConfirmed: true });
+  const adapter = new FlowAdapter(store, new BrowserManager(store), new CookieBridge());
+  let attempts = 0;
+  context.mock.method(adapter, "generate", async (input: GenerationRequest, skipped: string[]) => {
+    attempts++;
+    assert.equal(input.accountId, "b");
+    assert.equal(input.model, request.model);
+    assert.deepEqual(input.referenceFiles, request.referenceFiles);
+    assert.deepEqual(skipped, ["a"]);
+    return store.updateJob(await store.createJob(input), "processing");
+  });
+  const replacement = await adapter.refreshJob(original.id);
+  assert.equal(replacement.retryOfJobId, original.id);
+  assert.equal((await store.getJob(original.id)).replacementJobId, replacement.id);
+  // Querying the original ID follows its recorded replacement, never resubmits.
+  const follow = adapter as unknown as { readyPage(): Promise<unknown>; waitForNewMedia(): Promise<null> };
+  context.mock.method(follow, "readyPage", async () => ({}));
+  context.mock.method(follow, "waitForNewMedia", async () => null);
+  await store.updateJob(replacement, "processing", { baselineMediaKeys: [] });
+  assert.equal((await adapter.refreshJob(original.id)).id, replacement.id);
+  assert.equal(attempts, 1);
 });
 
 test("routing falls back only before submission on typed credit insufficiency", async (context) => {

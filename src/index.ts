@@ -76,7 +76,7 @@ server.registerTool("flow_account_credits", {
 });
 
 server.registerTool("flow_configure_account_switching", {
-  description: "Save an ordered whitelist of already connected accounts for automatic pre-submission credit fallback. Empty list disables switching. Only explicit zero balance or the configured request's insufficient-credit warning permits switching; never timeout, CAPTCHA, rate limit or policy failure. One output per request only.",
+  description: "Save an ordered whitelist of connected accounts for credit fallback. Empty disables switching. Switch before submission on explicit zero balance or insufficient-credit warning; after submission only on a response tied to this prompt that confirms failed, credit exhaustion and no charge. Never switch on timeout, CAPTCHA, rate limit or policy failure. One output per request only.",
   inputSchema: { accountIds: z.array(accountId).max(10) },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ accountIds }) => {

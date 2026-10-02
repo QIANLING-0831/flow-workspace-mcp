@@ -251,6 +251,7 @@ export class FlowStore {
       mediaType: request.mediaType,
       status: "created",
       prompt: request.prompt,
+      referenceFiles: request.referenceFiles,
       outputs: request.outputs,
       upscale: request.upscale,
       outputDirectory: request.outputDirectory,

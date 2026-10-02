@@ -5,7 +5,7 @@ import { preferredPersistentApprovalIndex } from "./approval.js";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
 import { CookieBridge } from "./cookie-bridge.js";
-import { parseCreditBalance } from "./credits.js";
+import { confirmedCreditRejection, parseCreditBalance } from "./credits.js";
 import { FlowError } from "./errors.js";
 import { mediaExtension, probeMedia } from "./media.js";
 import {
@@ -41,7 +41,7 @@ const SYMBOL_SELECTOR = "i, mat-icon";
 const SEGMENT_GROUP_SELECTOR = '[role="tablist"], mat-button-toggle-group[role="radiogroup"]';
 const SEGMENT_OPTION_SELECTOR = '[role="tab"], button[role="radio"]';
 const MENU_OPTION_SELECTOR = '[role="menuitem"], [role="menuitemradio"], [role="option"]';
-const FAILURE_TEXT = /generation failed|couldn't generate|unable to generate|not enough (?:ai )?credits|blocked by policy|try again|no se (?:ha podido|pudo) generar|error al generar|puntos insuficientes|int[eé]ntalo de nuevo/i;
+const FAILURE_TEXT = /generation failed|couldn't generate|unable to generate|not enough (?:ai )?credits|blocked by policy|try again|无法生成此(?:视频|图片)|生成失败|no se (?:ha podido|pudo) generar|error al generar|puntos insuficientes|int[eé]ntalo de nuevo/i;
 
 interface AgentSettingsCapabilities {
   models: { image: CapabilityOption[]; video: CapabilityOption[] };
@@ -349,18 +349,19 @@ export class FlowAdapter {
     });
   }
 
-  async generate(request: GenerationRequest): Promise<FlowJob> {
+  async generate(request: GenerationRequest, skippedAccounts: string[] = []): Promise<FlowJob> {
     const configured = (await this.store.listAccounts()).switchAccountIds ?? [];
     // Explicit account selection stays first; only configured accounts are fallbacks.
-    const ids = [request.accountId, ...configured.filter((id) => id !== request.accountId)];
+    const ids = [request.accountId, ...configured.filter((id) => id !== request.accountId)].filter((id) => !skippedAccounts.includes(id));
     if (ids.length > 1 && request.outputs !== 1) {
       throw new FlowError("validation_error", "Automatic account switching requires outputs=1 to avoid replaying partially successful batches.");
     }
-    const skipped: string[] = [];
+    const skipped = [...skippedAccounts];
     for (const accountId of ids) {
       try {
         const job = await this.generateOnAccount({ ...request, accountId }, ids.length > 1);
         if (skipped.length) await this.store.updateJob(job, job.status, { skippedCreditAccounts: skipped });
+        if (job.creditFailureConfirmed) return this.retryCreditRejectedJob(job);
         return job;
       } catch (error) {
         if (!(error instanceof FlowError) || error.code !== "insufficient_credits") throw error;
@@ -388,10 +389,12 @@ export class FlowAdapter {
     if (profile) {
       try {
         await profile.click({ timeout: 3_000 });
-        await page.waitForTimeout(350);
         const panels = page.locator('[role="menu"], [role="dialog"], .cdk-overlay-pane');
-        const texts = await visibleText(panels);
-        remaining = parseCreditBalance(texts.join("\n"));
+        const deadline = Date.now() + 5_000;
+        do {
+          await page.waitForTimeout(250);
+          remaining = parseCreditBalance((await visibleText(panels)).join("\n"));
+        } while (remaining === null && Date.now() < deadline);
       } catch {
         // A missing/changed account menu is unknown, never an exhausted account.
         remaining = null;
@@ -414,8 +417,8 @@ export class FlowAdapter {
         }
         await this.store.updateJob(job, "configuring", { flowProjectUrl: page.url() });
         await this.openProject(page, request.flowProject);
-        await this.ensureAgentAutoApprove(page);
-        await this.store.updateJob(job, "configuring", { creditConfirmationMode: "auto_approve" });
+        const approvalMode = await this.ensureAgentAutoApprove(page);
+        await this.store.updateJob(job, "configuring", { creditConfirmationMode: approvalMode });
         await this.configureGeneration(page, request);
         await this.attachReferences(page, request.referenceFiles);
         await this.fillPrompt(
@@ -448,6 +451,7 @@ export class FlowAdapter {
           Math.min(request.timeoutSeconds, 20),
           job,
         );
+        if (job.creditFailureConfirmed) return job;
 
         if (job.status === "completed") return job;
         if (!generated) return job;
@@ -468,8 +472,10 @@ export class FlowAdapter {
 
   async refreshJob(jobId: string, timeoutSeconds = 15): Promise<FlowJob> {
     const job = await this.store.getJob(jobId);
+    if (job.replacementJobId) return this.refreshJob(job.replacementJobId, timeoutSeconds);
+    if (job.creditFailureConfirmed) return this.retryCreditRejectedJob(job);
     if (["completed", "failed", "needs_attention"].includes(job.status)) return job;
-    return this.browsers.runExclusive(job.accountId, async () => {
+    const result = await this.browsers.runExclusive(job.accountId, async () => {
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
       if (["ready", "downloading"].includes(job.status) && job.generatedAssets?.length) {
         return await this.finalizeReadyJob(page, job, timeoutSeconds);
@@ -485,7 +491,13 @@ export class FlowAdapter {
       if (!job.baselineMediaKeys) {
         throw new FlowError("job_asset_identity_missing", "This job predates exact asset tracking and cannot be refreshed safely. Generate it again with the current MCP version.");
       }
-      const generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds, job);
+      let generated: MediaSnapshot[] | null;
+      try {
+        generated = await this.waitForNewMedia(page, job.mediaType, job.baselineMediaKeys, job.outputs, timeoutSeconds, job);
+      } catch (error) {
+        if (!(error instanceof FlowError) || error.code !== "generation_failed") throw error;
+        return this.store.updateJob(job, "failed", { error: error.message });
+      }
       if (job.status === "completed") return job;
       if (generated && job.status === "processing") {
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });
@@ -493,6 +505,37 @@ export class FlowAdapter {
       }
       return job;
     });
+    return result.creditFailureConfirmed ? this.retryCreditRejectedJob(result) : result;
+  }
+
+  private async retryCreditRejectedJob(original: FlowJob): Promise<FlowJob> {
+    const claimed = await this.browsers.runExclusive(original.accountId, async () => {
+      const job = await this.store.getJob(original.id);
+      if (job.replacementJobId) return { job, next: undefined };
+      if (job.creditRetryStarted) throw new FlowError("generation_failed", "Credit retry was already started but no replacement job was recorded; do not resubmit automatically.");
+      const skipped = [...(job.skippedCreditAccounts ?? []), job.accountId];
+      const next = (await this.store.listAccounts()).switchAccountIds?.find((id) => !skipped.includes(id));
+      if (!next || job.outputs !== 1 || !job.creditFailureConfirmed) return { job, next: undefined };
+      await this.store.updateJob(job, "failed", { creditRetryStarted: true });
+      return { job, next };
+    });
+    const { job, next } = claimed;
+    if (job.replacementJobId) return this.store.getJob(job.replacementJobId);
+    if (!next) return job;
+    const skipped = [...(job.skippedCreditAccounts ?? []), job.accountId];
+    const replacement = await this.generate({
+      accountId: next, mediaType: job.mediaType, prompt: job.prompt,
+      outputs: job.outputs, referenceFiles: job.referenceFiles ?? [], upscale: job.upscale,
+      outputDirectory: job.outputDirectory, download: job.downloadRequested ?? false,
+      timeoutSeconds: 20, ...(job.model ? { model: job.model } : {}),
+      ...(job.aspectRatio ? { aspectRatio: job.aspectRatio } : {}),
+      ...(job.durationSeconds ? { durationSeconds: job.durationSeconds } : {}),
+      ...(job.flowProject ? { flowProject: job.flowProject } : {}),
+      ...(job.fileName ? { fileName: job.fileName } : {}),
+    }, skipped);
+    await this.store.updateJob(replacement, replacement.status, { retryOfJobId: job.id });
+    await this.store.updateJob(job, "failed", { replacementJobId: replacement.id });
+    return replacement;
   }
 
   async upscaleJob(jobId: string, factor: Exclude<UpscaleFactor, "none">, timeoutSeconds: number): Promise<FlowJob> {
@@ -740,6 +783,7 @@ export class FlowAdapter {
     const tune = await firstVisible([
       page.locator("button").filter({ has: page.locator(SYMBOL_SELECTOR, { hasText: /^tune$/ }) }),
       page.locator("button").filter({ has: page.locator(SYMBOL_SELECTOR, { hasText: /^settings_2$/ }) }),
+      page.locator("button.settings-trigger-button"),
     ]);
     if (!tune) return false;
     await tune.click();
@@ -747,7 +791,26 @@ export class FlowAdapter {
     return await visibleCount(page.locator(SEGMENT_GROUP_SELECTOR)) >= 2;
   }
 
-  private async readAgentSettings(page: Page, durationHints: number[]): Promise<AgentSettingsCapabilities> {
+  private async readAgentSettings(page: Page, durationHints: number[], readBoth = true): Promise<AgentSettingsCapabilities> {
+    const mediaGroup = page.locator(SEGMENT_GROUP_SELECTOR).filter({ hasText: /videocam/ });
+    if (readBoth && await mediaGroup.isVisible().catch(() => false)) {
+      const selected = await mediaGroup.locator('[aria-checked="true"]').innerText().catch(() => "");
+      const image = mediaGroup.locator(SEGMENT_OPTION_SELECTOR).filter({ hasText: /image/ });
+      const video = mediaGroup.locator(SEGMENT_OPTION_SELECTOR).filter({ hasText: /videocam/ });
+      await image.click();
+      await page.waitForTimeout(200);
+      const imageCapabilities = await this.readAgentSettings(page, durationHints, false);
+      await video.click();
+      await page.waitForTimeout(200);
+      const videoCapabilities = await this.readAgentSettings(page, durationHints, false);
+      if (!/videocam/.test(selected)) await image.click();
+      return {
+        models: { image: imageCapabilities.models.image, video: videoCapabilities.models.video },
+        ratios: { image: imageCapabilities.ratios.image, video: videoCapabilities.ratios.video },
+        outputs: { image: imageCapabilities.outputs.image, video: videoCapabilities.outputs.video },
+        durationSeconds: videoCapabilities.durationSeconds,
+      };
+    }
     const ratioGroups: string[][] = [];
     const outputGroups: number[][] = [];
     const tablists = page.locator(SEGMENT_GROUP_SELECTOR);
@@ -807,6 +870,12 @@ export class FlowAdapter {
     request: GenerationRequest,
     durationHints: number[],
   ): Promise<void> {
+    const mediaGroup = page.locator(SEGMENT_GROUP_SELECTOR).filter({ hasText: /videocam/ });
+    const standard = await mediaGroup.isVisible().catch(() => false);
+    if (standard) {
+      await mediaGroup.locator(SEGMENT_OPTION_SELECTOR).filter({ hasText: request.mediaType === "video" ? /videocam/ : /image/ }).click();
+      await page.waitForTimeout(200);
+    }
     const capabilities = await this.readAgentSettings(page, durationHints);
     const media = request.mediaType;
     const modelOptions = capabilities.models[media];
@@ -869,6 +938,10 @@ export class FlowAdapter {
       }
     }
 
+    if (standard) {
+      await this.dismissMenu(page);
+      return;
+    }
     const save = await lastVisible(page.locator("button"));
     if (!save) throw new FlowError("ui_changed", "Could not find the agent-settings save control.");
     await save.click();
@@ -878,7 +951,7 @@ export class FlowAdapter {
   private async dismissMenu(page: Page): Promise<void> {
     await page.keyboard.press("Escape").catch(() => undefined);
     const backdrop = await lastVisible(page.locator(".cdk-overlay-backdrop"));
-    if (backdrop) await backdrop.click();
+    if (backdrop) await backdrop.click({ position: { x: 5, y: 5 }, timeout: 1_000 });
   }
 
   private async chooseAgentTab(
@@ -983,7 +1056,11 @@ export class FlowAdapter {
     }
   }
 
-  private async ensureAgentAutoApprove(page: Page): Promise<void> {
+  private async ensureAgentAutoApprove(page: Page): Promise<"auto_approve" | "direct_submit"> {
+    if (await firstVisible([page.locator("button.settings-trigger-button")])) {
+      await this.dismissMenu(page);
+      return "direct_submit";
+    }
     await page.keyboard.press("Escape").catch(() => undefined);
     const openSettings = async (): Promise<Locator> => {
       const approvalControls = () => [
@@ -1035,6 +1112,7 @@ export class FlowAdapter {
       }
     }
     await closeSettings();
+    return "auto_approve";
   }
 
   private async clickGenerate(page: Page, mediaType: MediaType, mediaBaseline: number): Promise<void> {
@@ -1182,6 +1260,10 @@ export class FlowAdapter {
     const openedPreviews = new Set<string>();
     while (Date.now() < deadline) {
       const body = (await page.locator("body").innerText().catch(() => "")).slice(-10_000);
+      if (job && confirmedCreditRejection(body, job.prompt)) {
+        await this.store.updateJob(job, "failed", { creditFailureConfirmed: true, error: "Flow explicitly rejected this request for credit exhaustion and confirmed it was not charged." });
+        return null;
+      }
       if (FAILURE_TEXT.test(body)) {
         throw new FlowError("generation_failed", "Flow reported that the generation failed or requires attention.");
       }

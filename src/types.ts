@@ -80,6 +80,11 @@ export interface MediaAssetIdentity {
 export interface FlowJob {
   id: string;
   skippedCreditAccounts?: string[];
+  creditFailureConfirmed?: boolean;
+  replacementJobId?: string;
+  creditRetryStarted?: boolean;
+  retryOfJobId?: string;
+  referenceFiles?: string[];
   accountId: string;
   mediaType: MediaType;
   status: JobStatus;
@@ -102,7 +107,7 @@ export interface FlowJob {
   mediaProbe?: MediaProbe[];
   error?: string;
   diagnosticScreenshot?: string;
-  creditConfirmationMode?: "auto_approve";
+  creditConfirmationMode?: "auto_approve" | "direct_submit";
   baselineMediaCount?: number;
   baselineMediaKeys?: string[];
   generatedAssets?: MediaAssetIdentity[];

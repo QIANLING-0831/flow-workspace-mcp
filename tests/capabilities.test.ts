@@ -6,6 +6,7 @@ test("normalizes Flow model labels independently of decoration", () => {
   assert.equal(normalizeCapabilityId("Gemini Omni Flash"), "omni-flash");
   assert.equal(normalizeCapabilityId("🍌 Nano Banana 2 Lite arrow_drop_down"), "nano-banana-2-lite");
   assert.equal(normalizeCapabilityId("Veo 3.1 - Quality"), "veo-3-1-quality");
+  assert.equal(normalizeCapabilityId("volume_up Omni 1.1 Flash"), "omni-1-1-flash");
   assert.equal(cleanCapabilityLabel("🍌 Nano Banana Pro arrow_drop_down"), "Nano Banana Pro");
 });
 

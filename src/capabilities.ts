@@ -4,7 +4,7 @@ export interface CapabilityOption {
   selected: boolean;
 }
 
-const ICON_WORDS = /\b(?:arrow_drop_down|crop_16_9|crop_9_16|crop_landscape|crop_portrait|crop_square)\b/gi;
+const ICON_WORDS = /\b(?:arrow_drop_down|volume_up|crop_16_9|crop_9_16|crop_landscape|crop_portrait|crop_square)\b/gi;
 
 export function cleanCapabilityLabel(value: string): string {
   return value
