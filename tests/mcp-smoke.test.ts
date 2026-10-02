@@ -31,8 +31,10 @@ test("MCP server exposes the intended Flow tools", async (context) => {
   assert.deepEqual(
     listed.tools.map((tool) => tool.name).sort(),
     [
+      "flow_account_credits",
       "flow_begin_account_connection",
       "flow_complete_account_connection",
+      "flow_configure_account_switching",
       "flow_download_job",
       "flow_generate_image",
       "flow_generate_video",

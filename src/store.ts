@@ -186,6 +186,20 @@ export class FlowStore {
     );
   }
 
+  async configureAccountSwitching(accountIds: string[]): Promise<string[]> {
+    return this.withAccountsLock(async () => {
+      accountIds = accountIds.map(validateAccountId);
+      if (new Set(accountIds).size !== accountIds.length) {
+        throw new FlowError("validation_error", "Account IDs must be unique.");
+      }
+      for (const id of accountIds) await this.requireConnectedAccount(id);
+      const file = await this.listAccounts();
+      file.switchAccountIds = accountIds;
+      await atomicWriteJson(this.accountsFile, file);
+      return accountIds;
+    });
+  }
+
   async touchAccount(accountId: string, workspaceUrl?: string): Promise<void> {
     if (workspaceUrl && !isFlowPageUrl(workspaceUrl)) throw new FlowError("validation_error", "Only a trusted Flow workspace URL can be remembered.");
     await this.withAccountsLock(async () => {

@@ -5,6 +5,7 @@ import { preferredPersistentApprovalIndex } from "./approval.js";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
 import { CookieBridge } from "./cookie-bridge.js";
+import { parseCreditBalance } from "./credits.js";
 import { FlowError } from "./errors.js";
 import { mediaExtension, probeMedia } from "./media.js";
 import {
@@ -349,12 +350,68 @@ export class FlowAdapter {
   }
 
   async generate(request: GenerationRequest): Promise<FlowJob> {
+    const configured = (await this.store.listAccounts()).switchAccountIds ?? [];
+    // Explicit account selection stays first; only configured accounts are fallbacks.
+    const ids = [request.accountId, ...configured.filter((id) => id !== request.accountId)];
+    if (ids.length > 1 && request.outputs !== 1) {
+      throw new FlowError("validation_error", "Automatic account switching requires outputs=1 to avoid replaying partially successful batches.");
+    }
+    const skipped: string[] = [];
+    for (const accountId of ids) {
+      try {
+        const job = await this.generateOnAccount({ ...request, accountId }, ids.length > 1);
+        if (skipped.length) await this.store.updateJob(job, job.status, { skippedCreditAccounts: skipped });
+        return job;
+      } catch (error) {
+        if (!(error instanceof FlowError) || error.code !== "insufficient_credits") throw error;
+        skipped.push(accountId);
+      }
+    }
+    throw new FlowError("insufficient_credits", `No selected account can fund this request. Checked: ${skipped.join(", ")}. No automatic retry of submitted jobs was performed.`);
+  }
+
+  async inspectCredits(accountId?: string) {
+    const account = await this.store.requireConnectedAccount(accountId);
+    return this.browsers.runExclusive(account.id, async () => {
+      const page = await this.readyPage(account.id, true);
+      return { accountId: account.id, ...(await this.readCredits(page)) };
+    });
+  }
+
+  private async readCredits(page: Page) {
+    const profile = await firstVisible([
+      page.getByRole("button", { name: /^Account details$|^账号详情$|^帳戶詳情$/i }),
+      page.getByRole("button", { name: /Google Account:|Google 账号|Google 帐号|Google 帳戶/i }),
+      page.locator('[aria-label*="Google Account"]'),
+    ]);
+    let remaining: number | null = null;
+    if (profile) {
+      try {
+        await profile.click({ timeout: 3_000 });
+        await page.waitForTimeout(350);
+        const panels = page.locator('[role="menu"], [role="dialog"], .cdk-overlay-pane');
+        const texts = await visibleText(panels);
+        remaining = parseCreditBalance(texts.join("\n"));
+      } catch {
+        // A missing/changed account menu is unknown, never an exhausted account.
+        remaining = null;
+      } finally {
+        await this.dismissMenu(page);
+      }
+    }
+    return { remainingCredits: remaining, dailyRemainingCredits: null, checkedAt: new Date().toISOString(), source: remaining === null ? "unavailable" : "Flow account menu" };
+  }
+
+  private async generateOnAccount(request: GenerationRequest, checkCredits = false): Promise<FlowJob> {
     const account = await this.store.requireConnectedAccount(request.accountId);
     const job = await this.store.createJob({ ...request, accountId: account.id });
     return this.browsers.runExclusive(account.id, async () => {
       let page: Page | undefined;
       try {
         page = await this.readyPage(account.id, true);
+        if (checkCredits && (await this.readCredits(page)).remainingCredits === 0) {
+          throw new FlowError("insufficient_credits", "Flow account menu explicitly reports zero remaining credits before submission.");
+        }
         await this.store.updateJob(job, "configuring", { flowProjectUrl: page.url() });
         await this.openProject(page, request.flowProject);
         await this.ensureAgentAutoApprove(page);
@@ -387,6 +444,11 @@ export class FlowAdapter {
           Math.min(request.timeoutSeconds, 20),
           job,
         );
+
+        const creditWarning = page.getByRole("button", { name: /^Insufficient credits warning$/i });
+        if (await creditWarning.isVisible().catch(() => false)) {
+          throw new FlowError("insufficient_credits", "Flow reports insufficient credits for the configured request before submission.");
+        }
         if (job.status === "completed") return job;
         if (!generated) return job;
         await this.store.updateJob(job, "ready", { generatedAssets: identitiesFor(generated) });

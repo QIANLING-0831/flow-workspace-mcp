@@ -1,5 +1,6 @@
 export type FlowErrorCode =
   | "validation_error"
+  | "insufficient_credits"
   | "account_not_found"
   | "login_required"
   | "flow_access_unavailable"

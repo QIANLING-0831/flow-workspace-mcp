@@ -67,6 +67,22 @@ const confirmCreditSpend = z
   .literal(true)
   .describe("Must be true. Confirms the user explicitly authorized this operation to consume Google Flow/AI credits.");
 
+server.registerTool("flow_account_credits", {
+  description: "Read the connected account's displayed credit balance without generation. Unknown is null; total balance is not assumed to be today's free credits.",
+  inputSchema: { accountId: connectedAccountId },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+}, async ({ accountId }) => {
+  try { return ok(await flow.inspectCredits(accountId)); } catch (error) { return failed(error); }
+});
+
+server.registerTool("flow_configure_account_switching", {
+  description: "Save an ordered whitelist of already connected accounts for automatic pre-submission credit fallback. Empty list disables switching. Only explicit zero balance or the configured request's insufficient-credit warning permits switching; never timeout, CAPTCHA, rate limit or policy failure. One output per request only.",
+  inputSchema: { accountIds: z.array(accountId).max(10) },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}, async ({ accountIds }) => {
+  try { return ok({ switchAccountIds: await store.configureAccountSwitching(accountIds) }); } catch (error) { return failed(error); }
+});
+
 server.registerTool(
   "flow_help",
   {
@@ -130,7 +146,7 @@ server.registerTool(
         readyForGeneration,
         connectionRequired: !readyForGeneration,
         agentInstruction: readyForGeneration
-          ? `ACCOUNT IS ALREADY CONNECTED. Use '${accounts.defaultAccountId}'. Call flow_inspect_account next. DO NOT call flow_begin_account_connection, flow_complete_account_connection, flow_login_bridge_status, PowerShell, or browser/computer-use tools.`
+          ? `ACCOUNT IS ALREADY CONNECTED. Use the configured switching order or '${accounts.defaultAccountId}'. Call flow_inspect_account next. DO NOT reconnect unless the user explicitly asks to add another account; then use a distinct new accountId. Never substitute browser/computer-use tools.`
           : "No verified default account exists. Call flow_begin_account_connection, STOP and tell the user to click Connect Flow in the extension, then wait for their reply before calling flow_complete_account_connection.",
       });
     } catch (error) {
@@ -281,7 +297,7 @@ server.registerTool(
   },
   async (input) => {
     try {
-      const account = await store.requireConnectedAccount(input.accountId);
+      const account = await store.requireConnectedAccount(input.accountId ?? (await store.listAccounts()).switchAccountIds?.[0]);
       const request: GenerationRequest = {
         accountId: account.id,
         mediaType: "video",
@@ -328,7 +344,7 @@ server.registerTool(
   },
   async (input) => {
     try {
-      const account = await store.requireConnectedAccount(input.accountId);
+      const account = await store.requireConnectedAccount(input.accountId ?? (await store.listAccounts()).switchAccountIds?.[0]);
       const request: GenerationRequest = {
         accountId: account.id,
         mediaType: "image",

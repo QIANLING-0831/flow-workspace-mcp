@@ -57,6 +57,7 @@ export interface TransferredBrowserSession {
 
 export interface AccountsFile {
   version: 1;
+  switchAccountIds?: string[];
   defaultAccountId?: string;
   accounts: AccountRecord[];
 }
@@ -78,6 +79,7 @@ export interface MediaAssetIdentity {
 
 export interface FlowJob {
   id: string;
+  skippedCreditAccounts?: string[];
   accountId: string;
   mediaType: MediaType;
   status: JobStatus;
