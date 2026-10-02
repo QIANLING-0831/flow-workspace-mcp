@@ -1,3 +1,13 @@
+export function isFlowPageUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "https:" && (url.hostname === "flow.google.com"
+      || (url.hostname === "labs.google" && /^\/fx\/(?:[^/]+\/)?tools\/flow(?:\/|$)/i.test(url.pathname)));
+  } catch {
+    return false;
+  }
+}
+
 export function canonicalFlowProjectUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);

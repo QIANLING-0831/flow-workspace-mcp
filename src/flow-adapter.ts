@@ -14,7 +14,7 @@ import {
   selectNewMedia,
   type MediaSnapshot,
 } from "./media-selection.js";
-import { canonicalFlowProjectUrl } from "./navigation.js";
+import { canonicalFlowProjectUrl, isFlowPageUrl } from "./navigation.js";
 import { safeFileStem } from "./paths.js";
 import { FlowStore } from "./store.js";
 import {
@@ -33,6 +33,7 @@ import {
 } from "./types.js";
 
 const LOGIN_TEXT = /sign in|choose an account|use your google account/i;
+const NEW_PROJECT_TEXT = /new project|create project|start.*project|nuevo proyecto|crear proyecto|新项目|新建项目|创建项目/i;
 const FAILURE_TEXT = /generation failed|couldn't generate|unable to generate|not enough (?:ai )?credits|blocked by policy|try again|no se (?:ha podido|pudo) generar|error al generar|puntos insuficientes|int[eé]ntalo de nuevo/i;
 
 interface AgentSettingsCapabilities {
@@ -443,7 +444,7 @@ export class FlowAdapter {
 
   private async readyPage(accountId: string, requireLogin: boolean, url?: string): Promise<Page> {
     const page = await this.browsers.pageFor(accountId);
-    if (!page.url().startsWith("https://labs.google/")) {
+    if (!isFlowPageUrl(page.url())) {
       await page.goto(url || FLOW_URL, { waitUntil: "domcontentloaded" });
     } else if (url && page.url() !== url) {
       await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -496,9 +497,11 @@ export class FlowAdapter {
   }
 
   private async hasWorkspace(page: Page): Promise<boolean> {
+    if (!isFlowPageUrl(page.url())) return false;
     if (/\/tools\/flow\/project\//i.test(page.url())) return true;
     if (await firstVisible([this.promptLocator(page)])) return true;
     if (await page.locator('a[href*="/tools/flow/project/"]').count().catch(() => 0)) return true;
+    if (await firstVisible([page.getByRole("button", { name: NEW_PROJECT_TEXT })])) return true;
     const createControls = page.locator("button").filter({ has: page.locator("i", { hasText: /^add_2$/ }) });
     return (await createControls.count().catch(() => 0)) > 0;
   }
@@ -540,6 +543,7 @@ export class FlowAdapter {
     if (await firstVisible([this.promptLocator(page)])) return;
 
     await Promise.race([
+      page.getByRole("button", { name: NEW_PROJECT_TEXT }).last().waitFor({ state: "visible", timeout: 8_000 }),
       page.locator('a[href*="/tools/flow/project/"]').first().waitFor({ state: "visible", timeout: 8_000 }),
       page.locator("button").filter({ has: page.locator("i", { hasText: /^add_2$/ }) }).last()
         .waitFor({ state: "visible", timeout: 8_000 }),
@@ -566,8 +570,7 @@ export class FlowAdapter {
     }
 
     const create = await firstVisible([
-      page.getByRole("button", { name: /new project|create project|start.*project/i }),
-      page.getByRole("button", { name: /nuevo proyecto|crear proyecto/i }),
+      page.getByRole("button", { name: NEW_PROJECT_TEXT }),
       page.locator("button").filter({ has: page.locator("i", { hasText: /^add_2$/ }) }).last(),
       page.getByText(/\+\s*new project|new project/i),
     ]);
