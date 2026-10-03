@@ -4,7 +4,7 @@
 
 <p align="center">复用 Google Flow 登录会话，跟踪生成任务，并交付身份可核对的本地素材。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-60a5fa?style=flat-square&amp;labelColor=172033" alt="docs: 中文"> <img src="https://img.shields.io/badge/maintainer-QIANLING-0831-60a5fa?style=flat-square&amp;labelColor=172033" alt="maintainer: QIANLING-0831"> </p>
+<p align="center"><img src="https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-60a5fa?style=flat-square&amp;labelColor=172033" alt="docs: 中文"> <img src="https://img.shields.io/badge/maintainer-QIANLING--0831-60a5fa?style=flat-square&amp;labelColor=172033" alt="maintainer: QIANLING-0831"> </p>
 
 <p align="center"><a href="#解决什么问题">解决什么问题</a> &nbsp; · &nbsp; <a href="#有什么优势">有什么优势</a> &nbsp; · &nbsp; <a href="#如何工作">如何工作</a> &nbsp; · &nbsp; <a href="#快速开始">快速开始</a></p>
 
