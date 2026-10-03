@@ -10,6 +10,7 @@ import { errorText, FlowError } from "./errors.js";
 import { FlowAdapter } from "./flow-adapter.js";
 import { assertExistingFiles, requireAbsoluteDirectory } from "./paths.js";
 import { FlowStore } from "./store.js";
+import { FlowSequences } from "./sequence.js";
 import type { FlowJob, GenerationRequest, UiCapabilities } from "./types.js";
 
 const store = new FlowStore();
@@ -18,6 +19,7 @@ const browsers = new BrowserManager(store);
 const cookieBridge = new CookieBridge();
 await cookieBridge.start();
 const flow = new FlowAdapter(store, browsers, cookieBridge);
+const sequences = new FlowSequences(store, flow, browsers);
 const extensionDirectory = fileURLToPath(new URL("../extension/", import.meta.url));
 
 const server = new McpServer({
@@ -76,7 +78,7 @@ server.registerTool("flow_account_credits", {
 });
 
 server.registerTool("flow_configure_account_switching", {
-  description: "Save an ordered whitelist of connected accounts for credit fallback. Empty disables switching. Switch before submission on explicit zero balance or insufficient-credit warning; after submission only on a response tied to this prompt that confirms failure and unambiguous credit exhaustion. No no-charge wording required. Never switch on ambiguous credit/daily-limit replies, timeout, CAPTCHA, rate limit or policy failure. One output per request only.",
+  description: "Save connected accounts for credit fallback. Switch on explicit credit insufficiency, including Flow's failed credit-or-daily-limit reply tied to the current prompt. No no-charge wording required. Never switch on queued/unknown tasks, timeout, CAPTCHA, explicit rate limit or policy failure. One output per request only.",
   inputSchema: { accountIds: z.array(accountId).max(10) },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 }, async ({ accountIds }) => {
@@ -425,6 +427,49 @@ server.registerTool(
     }
   },
 );
+
+server.registerTool("flow_generate_sequence", {
+  description: "Start a persistent ordered video-shot sequence. Exactly one output per shot, no upscale. Poll flow_sequence_status with the returned ID; it retries only a quota-failed shot on the configured next account, downloads it, then submits the next shot. Never start the sequence twice while waiting. Confirms credit spend for all listed shots and permitted quota retries.",
+  inputSchema: {
+    accountId: connectedAccountId,
+    outputDirectory,
+    model: z.string().default("ui-default"),
+    aspectRatio: z.string().regex(/^(?:ui-default|\d+:\d+)$/).default("16:9"),
+    shots: z.array(z.object({
+      prompt: z.string().min(3).max(20000),
+      fileName: z.string().max(120).optional(),
+      model: z.string().optional(),
+      aspectRatio: z.string().regex(/^(?:ui-default|\d+:\d+)$/).optional(),
+      durationSeconds: z.number().int().min(1).max(120).optional(),
+      referenceFiles,
+    })).min(1).max(50),
+    confirmCreditSpend,
+  },
+  annotations: {readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
+}, async input => {
+  try {
+    const account = await store.requireConnectedAccount(input.accountId ?? (await store.listAccounts()).switchAccountIds?.[0]);
+    const directory = requireAbsoluteDirectory(input.outputDirectory);
+    const requests: GenerationRequest[] = input.shots.map((shot,index) => {
+      const model = shot.model ?? input.model;
+      const ratio = shot.aspectRatio ?? input.aspectRatio;
+      return {accountId:account.id,mediaType:"video",prompt:shot.prompt,outputs:1,upscale:"none",download:false,timeoutSeconds:20,outputDirectory:directory,
+        fileName:shot.fileName ?? `shot-${String(index+1).padStart(3,"0")}`,referenceFiles:assertExistingFiles(shot.referenceFiles),
+        ...(model !== "ui-default" ? {model} : {}), ...(ratio !== "ui-default" ? {aspectRatio:ratio} : {}),
+        ...(shot.durationSeconds ? {durationSeconds:shot.durationSeconds} : {})};
+    });
+    return ok(await sequences.start(requests));
+  } catch (error) { return failed(error); }
+});
+
+server.registerTool("flow_sequence_status", {
+  description: "Poll the same sequence ID. Finalize/download the current shot before automatically submitting the next already-authorized shot; keep completed outputs untouched. Zero wait returns a saved snapshot without advancing. Do not create a new sequence to resume.",
+  inputSchema: {sequenceId:z.string().uuid(),waitSeconds:z.number().int().min(0).max(30).default(10)},
+  annotations: {readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:true},
+}, async ({sequenceId,waitSeconds}) => {
+  try { return ok(waitSeconds === 0 ? await store.getSequence(sequenceId) : await sequences.advance(sequenceId,waitSeconds)); }
+  catch (error) { return failed(error); }
+});
 
 const shutdown = async (): Promise<void> => {
   await browsers.closeAll();

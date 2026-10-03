@@ -5,7 +5,7 @@ import path from "node:path";
 import { FlowError } from "./errors.js";
 import { validateAccountId } from "./paths.js";
 import { isFlowPageUrl } from "./navigation.js";
-import type { AccountConnectionStatus, AccountOptions, AccountRecord, AccountsFile, FlowJob, GenerationRequest, JobStatus } from "./types.js";
+import type { AccountConnectionStatus, AccountOptions, AccountRecord, AccountsFile, FlowJob, FlowSequence, GenerationRequest, JobStatus } from "./types.js";
 
 function platformDataDir(): string {
   if (process.env.FLOW_MCP_DATA_DIR) return path.resolve(process.env.FLOW_MCP_DATA_DIR);
@@ -280,6 +280,19 @@ export class FlowStore {
   async saveJob(job: FlowJob): Promise<void> {
     job.updatedAt = new Date().toISOString();
     await atomicWriteJson(path.join(this.jobsDir, `${job.id}.json`), job);
+  }
+
+  async saveSequence(sequence: FlowSequence): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(sequence.id)) throw new FlowError("validation_error", "Invalid sequence ID.");
+    sequence.updatedAt = new Date().toISOString();
+    await atomicWriteJson(path.join(this.dataDir, "sequences", `${sequence.id}.json`), sequence);
+  }
+
+  async getSequence(id: string): Promise<FlowSequence> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw new FlowError("validation_error", "Use the returned sequence UUID.");
+    const sequence = await readJson<FlowSequence | null>(path.join(this.dataDir, "sequences", `${id}.json`), null);
+    if (!sequence) throw new FlowError("validation_error", "Flow sequence not found.");
+    return sequence;
   }
 
   async updateJob(job: FlowJob, status: JobStatus, patch: Partial<FlowJob> = {}): Promise<FlowJob> {

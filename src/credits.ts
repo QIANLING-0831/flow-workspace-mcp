@@ -22,9 +22,9 @@ export function currentPromptReply(text: string, prompt: string): string | null 
 export function confirmedCreditRejection(text: string, prompt: string): boolean {
   const response = currentPromptReply(text, prompt);
   if (response === null) return false;
-  // Mixed credit/daily-limit responses do not distinguish balance exhaustion
-  // from access/rate restrictions. Never rotate accounts for those restrictions.
-  if (/credit(?:s)?\s+or\s+(?:daily|rate)\s+limit|daily\s+limit|rate\s+limit|too many requests|captcha|验证码|限流|每日上限|policy|政策|封禁/i.test(response)) return false;
+  // Flow's credit-or-daily-quota failure is accepted; explicit security/rate
+  // restrictions still stop, even when a credit phrase is also present.
+  if (/rate\s+limit|too many requests|captcha|验证码|限流|policy|政策|封禁/i.test(response)) return false;
   return /\bFailed\b|失败/.test(response)
-    && /reached your credit limit|not enough (?:AI )?credits|insufficient (?:AI )?credits|(?:点数|积分|额度)不足/i.test(response);
+    && /reached your credit(?:\s+or\s+daily)? limit|not enough (?:AI )?credits|insufficient (?:AI )?credits|(?:点数|积分|额度)不足/i.test(response);
 }

@@ -43,6 +43,7 @@ test("a new video thumbnail downloads Original size from its own editor, never a
     mediaLocator(page: Page, type: string): Locator;
     saveCapturedDownload(job: FlowJob, download: Download, suffix: string): Promise<void>;
     waitForNewMedia(page: Page, type: string, baseline: string[], count: number, timeout: number, job: FlowJob): Promise<MediaSnapshot[] | null>;
+    tryDownloadOriginal(page: Page, job: FlowJob): Promise<boolean>;
   };
   context.mock.method(ui, "mediaSnapshots", async () => [preview]);
   context.mock.method(ui, "mediaLocator", () => new Control("thumbnail") as unknown as Locator);
@@ -54,4 +55,14 @@ test("a new video thumbnail downloads Original size from its own editor, never a
   assert.deepEqual(await ui.waitForNewMedia(page, "video", ["url:old-thumbnail"], 1, 20, job), []);
   assert.deepEqual(clicks, ["preview", "download", "original"]);
   assert.equal(job.status, "completed");
+  clicks.length = 0;
+  await store.updateJob(job,"processing");
+  context.mock.method(ui,"tryDownloadOriginal",async (_page,savedJob)=> {
+    assert.deepEqual(savedJob.generatedAssets,[{keys:preview.keys}]);
+    await store.updateJob(savedJob,"completed",{downloadTransport:"http"});
+    return true;
+  });
+  assert.deepEqual(await ui.waitForNewMedia(page,"video",["url:old-thumbnail"],1,20,job),[]);
+  assert.deepEqual(clicks,[]);
+  assert.equal(job.downloadTransport,"http");
 });

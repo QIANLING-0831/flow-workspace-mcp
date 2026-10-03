@@ -157,6 +157,21 @@ export interface UiCapabilities {
   diagnosticControls?: string;
 }
 
+export interface FlowSequence {
+  id: string;
+  status: "processing" | "completed" | "failed" | "needs_attention";
+  requests: GenerationRequest[];
+  cursor: number;
+  accountId: string;
+  skippedCreditAccounts: string[];
+  jobIds: Array<string | null>;
+  results: Array<{ shot: number; jobId: string; files: string[] }>;
+  submissionPending?: boolean;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UpscaleOption {
   id: string;
   label: string;

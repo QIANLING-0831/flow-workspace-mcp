@@ -2,6 +2,14 @@
 
 All notable changes to Google Flow MCP are documented here.
 
+## Workspace updates - 2026-10-02
+
+- Accept the current shot's terminal credit-or-daily-limit rejection for configured account fallback, without a price quote or no-charge wording.
+- Add persisted ordered video sequences: retry only the quota-failed shot, verify its download, then submit the next shot on the successful account.
+- Bind the created job before browser submission; interrupted, unbound submissions stop rather than replay.
+- Remove old gallery failure classification from submission waiting; current-prompt polling owns failure detection.
+- Keep queued/unknown tasks, CAPTCHA, explicit rate limits and policy failures out of automatic fallback.
+
 ## [0.2.3] - 2026-07-19
 
 ### Fixed

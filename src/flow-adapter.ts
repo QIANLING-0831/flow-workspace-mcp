@@ -350,7 +350,7 @@ export class FlowAdapter {
     });
   }
 
-  async generate(request: GenerationRequest, skippedAccounts: string[] = []): Promise<FlowJob> {
+  async generate(request: GenerationRequest, skippedAccounts: string[] = [], onJobCreated?: (job: FlowJob) => Promise<void>): Promise<FlowJob> {
     const configured = (await this.store.listAccounts()).switchAccountIds ?? [];
     // Explicit account selection stays first; only configured accounts are fallbacks.
     const ids = [request.accountId, ...configured.filter((id) => id !== request.accountId)].filter((id) => !skippedAccounts.includes(id));
@@ -360,7 +360,7 @@ export class FlowAdapter {
     const skipped = [...skippedAccounts];
     for (const accountId of ids) {
       try {
-        const job = await this.generateOnAccount({ ...request, accountId }, ids.length > 1);
+        const job = await this.generateOnAccount({ ...request, accountId }, ids.length > 1, onJobCreated);
         if (skipped.length) await this.store.updateJob(job, job.status, { skippedCreditAccounts: skipped });
         if (job.creditFailureConfirmed) return this.retryCreditRejectedJob(job);
         return job;
@@ -406,9 +406,10 @@ export class FlowAdapter {
     return { remainingCredits: remaining, dailyRemainingCredits: null, checkedAt: new Date().toISOString(), source: remaining === null ? "unavailable" : "Flow account menu" };
   }
 
-  private async generateOnAccount(request: GenerationRequest, checkCredits = false): Promise<FlowJob> {
+  private async generateOnAccount(request: GenerationRequest, checkCredits = false, onJobCreated?: (job: FlowJob) => Promise<void>): Promise<FlowJob> {
     const account = await this.store.requireConnectedAccount(request.accountId);
     const job = await this.store.createJob({ ...request, accountId: account.id });
+    await onJobCreated?.(job);
     return this.browsers.runExclusive(account.id, async () => {
       let page: Page | undefined;
       try {
@@ -1150,8 +1151,8 @@ export class FlowAdapter {
           return;
         }
         if (await this.mediaLocator(page, mediaType).count() > mediaBaseline) return;
-        const body = (await page.locator("body").innerText().catch(() => "")).slice(-8_000);
-        if (FAILURE_TEXT.test(body)) throw new FlowError("generation_failed", "Flow reported that generation could not start.");
+        // Submission/approval wait is not task classification. The poll path
+        // owns current-prompt failure and quota checks; old gallery errors do not.
         await page.waitForTimeout(1_000);
       }
       // A queued submission need not mount a playable video yet. Poll the same job.
@@ -1284,6 +1285,10 @@ export class FlowAdapter {
       if (type === "video" && await page.locator("video").count() === 0) {
         const preview = candidates.find((candidate) => candidate.sourceUrl && !openedPreviews.has(candidate.sourceUrl));
         if (preview) {
+          if (job?.downloadRequested && job.outputs === 1 && job.upscale === "none") {
+            job.generatedAssets = identitiesFor([preview]);
+            if (await this.tryDownloadOriginal(page, job)) return [];
+          }
           const thumbnail = media.nth(preview.index);
           const trigger = thumbnail.locator("xpath=ancestor::*[@role='button'][1]");
           if (await trigger.isVisible().catch(() => false)) {

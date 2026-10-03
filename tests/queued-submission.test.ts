@@ -22,7 +22,7 @@ test("a queued video without a mounted player is submitted once and remains poll
     async isVisible() { return true; }
     async isEnabled() { return true; }
     async click() { clicks += 1; }
-    async innerText() { return "Your video is scheduled and currently in the queue."; }
+    async innerText() { return "Old shot: generation failed. Please try again.\nNew shot: Your video is scheduled and currently in the queue."; }
   }
   const page = {
     locator: (selector: string, options?: {hasText?: RegExp}) => options?.hasText

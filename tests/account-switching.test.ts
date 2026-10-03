@@ -23,14 +23,14 @@ test("credit parser ignores daily promotional grants and preserves unknown", () 
   assert.equal(parseCreditBalance("Remaining credits: 10\n0 credits remaining"), null);
 });
 
-test("terminal credit rejection requires this prompt, failure and unambiguous quota, not no-charge wording", () => {
+test("terminal credit rejection requires this prompt and an accepted quota failure, not no-charge wording", () => {
   const reply = "robot shot\nFailed\nYou've reached your credit limit. You won't be charged any credits for this failed attempt.";
   assert.equal(confirmedCreditRejection(reply, "robot shot"), true);
   assert.equal(confirmedCreditRejection(reply, "other shot"), false);
   assert.equal(confirmedCreditRejection("Failed. Reached your credit limit. You won't be charged.\nrobot shot\nQueued", "robot shot"), false);
   assert.equal(confirmedCreditRejection("robot shot\nFailed. Reached your credit limit.", "robot shot"), true);
   assert.equal(confirmedCreditRejection("robot shot\nFailed. Insufficient AI credits.", "robot shot"), true);
-  assert.equal(confirmedCreditRejection("robot shot\nFailed. Credit or daily limit. You won't be charged.", "robot shot"), false);
+  assert.equal(confirmedCreditRejection("robot shot\nFailed. You've reached your credit or daily limit.", "robot shot"), true);
   assert.equal(confirmedCreditRejection("robot shot\nQueued. Not enough credits.", "robot shot"), false);
   assert.equal(confirmedCreditRejection("robot shot\nFailed. Rate limit. Insufficient AI credits.", "robot shot"), false);
   assert.equal(confirmedCreditRejection("robot shot\nFailed. Policy blocked. You won't be charged.", "robot shot"), false);
@@ -102,10 +102,12 @@ test("an old failed shot must not abort the next shot", async (context) => {
   assert.deepEqual(await seam.waitForNewMedia(page,"video",[],1,15,job),[candidate]);
 });
 
-test("ambiguous live credit/daily-limit reply remains unsafe even with old no-charge confirmation", () => {
+test("current failed credit-or-daily-quota message permits fallback without old no-charge text", () => {
   const prompt = "new regression robot shot";
   const body = `Failed\nYou have not been charged for this generation.\nold prompt\n${prompt}\nFailed\nSomething went wrong. Please try again.\nI couldn't generate that video because you've reached your credit or daily limit.`;
-  assert.equal(confirmedCreditRejection(body, prompt), false);
+  assert.equal(confirmedCreditRejection(body, prompt), true);
+  assert.equal(confirmedCreditRejection(`${prompt}\nQueued\nYou've reached your credit or daily limit.`,prompt), false);
+  assert.equal(confirmedCreditRejection(`${prompt}\nFailed\nYou've reached your credit or daily limit. Too many requests.`,prompt), false);
 });
 
 test("a current failed credit reply without no-charge text routes the actual poll path once", async (context) => {

@@ -11,6 +11,7 @@ profiles/
 browser-sessions/
 diagnostics/
 jobs/
+sequences/
 accounts.json
 cookies*.json
 storage-state*.json
