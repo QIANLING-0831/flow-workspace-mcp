@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { request as httpRequest } from "playwright";
 import { FlowAdapter } from "../src/flow-adapter.js";
 import { FlowStore } from "../src/store.js";
 import { BrowserManager } from "../src/browser-manager.js";
@@ -133,6 +134,38 @@ test("a current failed credit reply without no-charge text routes the actual pol
   assert.equal((await store.getJob(original.id)).creditFailureConfirmed,true);
   assert.equal((await adapter.refreshJob(original.id)).id,result.id);
   assert.equal(submissions,1);
+});
+
+test("backend quota polling routes before any page controls and ignores pre-submission failures", async context => {
+  const directory = await mkdtemp(path.join(os.tmpdir(),"flow-backend-quota-"));
+  context.after(()=>rm(directory,{recursive:true,force:true}));
+  const store = new FlowStore(directory);
+  for(const id of ["a","b"]){await store.ensureAccount(id);await store.markAccountConnected(id);}
+  await store.configureAccountSwitching(["a","b"]);
+  const input:GenerationRequest = {accountId:"a",mediaType:"video",prompt:"new backend shot",outputs:1,upscale:"none",referenceFiles:[],outputDirectory:directory,download:false,timeoutSeconds:15};
+  const conversationId = "11111111-1111-1111-1111-111111111111";
+  const turn = [[[[[`Create exactly one video: ${input.prompt}`]]]],[[null,[[null,null,null,null,["call","generate_video_from_text",[[["status",[null,null,"error"]],["error_code",[null,null,"PUBLIC_ERROR_USER_QUOTA_REACHED"]]]]]]]]]];
+  const client = {dispose:async()=>{},get:async()=>({ok:()=>true,text:async()=>'{"SNlM0e":"token","cfb2h":"build","FdrFJe":"session"}',dispose:async()=>{}}),post:async (_url:string,options:{data:string})=>{
+    const call = JSON.parse(new URLSearchParams(options.data).get("f.req")!)[0][0];
+    const payload = call[0] === "mrlkwd" ? [[[conversationId]]] : [[conversationId],[turn]];
+    return {ok:()=>true,text:async()=>JSON.stringify([["wrb.fr",call[0],JSON.stringify(payload)]]),dispose:async()=>{}};
+  }};
+  context.mock.method(httpRequest,"newContext",async()=>client);
+  const browsers = new BrowserManager(store);
+  context.mock.method(browsers,"runExclusive",async (_id:string,operation:()=>Promise<unknown>)=>operation());
+  context.mock.method(browsers,"pageFor",async()=>({context:()=>({cookies:async()=>[]})}));
+  const adapter = new FlowAdapter(store,browsers,new CookieBridge());
+  const seam = adapter as unknown as {readyPage():Promise<unknown>};
+  context.mock.method(seam,"readyPage",async()=>{throw new Error("Quota must be read before DOM controls");});
+  let submissions = 0;
+  context.mock.method(adapter,"generate",async (request:GenerationRequest)=>{submissions++;return store.updateJob(await store.createJob(request),"processing");});
+  const original = await store.updateJob(await store.createJob(input),"processing",{flowProjectUrl:`https://flow.google.com/project/${conversationId}`,backendConversationBaseline:{[conversationId]:0},baselineMediaKeys:[]});
+  const replacement = await adapter.refreshJob(original.id);
+  assert.equal(replacement.accountId,"b");assert.equal(submissions,1);
+  assert.equal((await store.getJob(original.id)).backendFailureCode,"PUBLIC_ERROR_USER_QUOTA_REACHED");
+  const stale = await store.updateJob(await store.createJob(input),"processing",{flowProjectUrl:original.flowProjectUrl,backendConversationBaseline:{[conversationId]:1},baselineMediaKeys:[]});
+  await assert.rejects(adapter.refreshJob(stale.id),/Quota must be read before DOM controls/);
+  assert.equal(submissions,1,"Old backend error must not rotate a new job");
 });
 
 test("routing falls back only before submission on typed credit insufficiency", async (context) => {

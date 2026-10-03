@@ -81,6 +81,9 @@ export interface FlowJob {
   id: string;
   skippedCreditAccounts?: string[];
   creditFailureConfirmed?: boolean;
+  backendConversationBaseline?: Record<string,number>;
+  backendFailureCode?: string;
+  backendFailureConversationId?: string;
   replacementJobId?: string;
   creditRetryStarted?: boolean;
   retryOfJobId?: string;

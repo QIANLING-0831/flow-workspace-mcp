@@ -70,7 +70,7 @@ const confirmCreditSpend = z
   .describe("Must be true. Confirms the user explicitly authorized this operation to consume Google Flow/AI credits.");
 
 server.registerTool("flow_account_credits", {
-  description: "Read the connected account's displayed credit balance without generation. Unknown is null; total balance is not assumed to be today's free credits.",
+  description: "Read the connected account's credit balance through GetCredits RPC when available, with UI fallback, without generation. Unknown is null; total balance is not assumed to be today's free credits.",
   inputSchema: { accountId: connectedAccountId },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
 }, async ({ accountId }) => {

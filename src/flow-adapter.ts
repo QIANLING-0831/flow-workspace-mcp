@@ -8,7 +8,7 @@ import { CookieBridge } from "./cookie-bridge.js";
 import { confirmedCreditRejection, currentPromptReply, parseCreditBalance } from "./credits.js";
 import { FlowError } from "./errors.js";
 import { mediaExtension, probeMedia } from "./media.js";
-import { readOriginalVideo, trackedVideoId } from "./read-api.js";
+import { readBackendCredits, readConversationBaseline, readJobQuotaFailure, readOriginalVideo, trackedVideoId } from "./read-api.js";
 import {
   flattenMediaKeys,
   identitiesFor,
@@ -381,6 +381,13 @@ export class FlowAdapter {
   }
 
   private async readCredits(page: Page) {
+    let client;
+    try {
+      client = await httpRequest.newContext({storageState:{cookies:await page.context().cookies(),origins:[]}});
+      const remaining = await readBackendCredits(client,canonicalFlowProjectUrl(page.url()));
+      if (remaining !== null) return {remainingCredits:remaining,dailyRemainingCredits:null,checkedAt:new Date().toISOString(),source:"Flow GetCredits RPC"};
+    } catch { /* No project/session or changed schema: retain account-menu fallback. */ }
+    finally { await client?.dispose(); }
     const profile = await firstVisible([
       page.getByRole("button", { name: /^Account details$|^账号详情$|^帳戶詳情$/i }),
       page.getByRole("button", { name: /Google Account:|Google 账号|Google 帐号|Google 帳戶/i }),
@@ -442,8 +449,10 @@ export class FlowAdapter {
           baselineMediaKeys,
           flowProjectUrl: page.url(),
         });
+        await this.captureBackendBaseline(page, job);
         await this.clickGenerate(page, request.mediaType, baseline);
         await this.store.updateJob(job, "processing");
+        if (await this.checkBackendQuota(job)) return job;
 
         const generated = await this.waitForNewMedia(
           page,
@@ -478,6 +487,7 @@ export class FlowAdapter {
     if (job.creditFailureConfirmed) return this.retryCreditRejectedJob(job);
     if (["completed", "failed", "needs_attention"].includes(job.status)) return job;
     const result = await this.browsers.runExclusive(job.accountId, async () => {
+      if (job.status === "processing" && await this.checkBackendQuota(job)) return job;
       const page = await this.readyPage(job.accountId, true, job.flowProjectUrl);
       if (["ready", "downloading"].includes(job.status) && job.generatedAssets?.length) {
         return await this.finalizeReadyJob(page, job, timeoutSeconds);
@@ -1512,6 +1522,34 @@ export class FlowAdapter {
       downloadedFiles: [destination], mediaProbe: [probe], downloadTransport: "http",
     });
     await this.writeManifest(completed);
+    return true;
+  }
+
+  private async captureBackendBaseline(page: Page, job: FlowJob): Promise<void> {
+    if (job.mediaType !== "video" || job.outputs !== 1 || !job.flowProjectUrl) return;
+    let client;
+    let baseline;
+    try {
+      client = await httpRequest.newContext({storageState:{cookies:await page.context().cookies(),origins:[]}});
+      baseline = await readConversationBaseline(client,job.flowProjectUrl);
+    } catch { /* Unavailable private schema leaves the existing UI path intact. */ }
+    finally { await client?.dispose(); }
+    if (baseline) await this.store.updateJob(job,job.status,{backendConversationBaseline:baseline});
+  }
+
+  private async checkBackendQuota(job: FlowJob): Promise<boolean> {
+    // Old jobs have no pre-submission history boundary; never borrow a past failure.
+    if (!job.backendConversationBaseline) return false;
+    let client;
+    let failure;
+    try {
+      const page = await this.browsers.pageFor(job.accountId);
+      client = await httpRequest.newContext({storageState:{cookies:await page.context().cookies(),origins:[]}});
+      failure = await readJobQuotaFailure(client,job);
+    } catch { return false; }
+    finally { await client?.dispose(); }
+    if (!failure) return false;
+    await this.store.updateJob(job,"failed",{creditFailureConfirmed:true,backendFailureCode:failure.code,backendFailureConversationId:failure.conversationId,error:"Flow backend rejected this shot for user quota."});
     return true;
   }
 

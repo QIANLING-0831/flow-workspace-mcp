@@ -4,6 +4,10 @@ All notable changes to Google Flow MCP are documented here.
 
 ## Workspace updates - 2026-10-02
 
+- Add observed GetCredits and session-result HTTP reads; quota routing prefers structured codes scoped after a pre-submission conversation baseline.
+- Preserve UI fallback for unavailable private schemas, and exclude old failures, ambiguous prompts and explicit throttling.
+- Normalize current project subroutes back to their workspace. Generation submission remains UI-based and its latest live probe failed before submission; this is not a pure-backend generation release.
+
 - Accept the current shot's terminal credit-or-daily-limit rejection for configured account fallback, without a price quote or no-charge wording.
 - Add persisted ordered video sequences: retry only the quota-failed shot, verify its download, then submit the next shot on the successful account.
 - Bind the created job before browser submission; interrupted, unbound submissions stop rather than replay.
