@@ -1,4 +1,22 @@
-# Flow Workspace MCP
+<p align="center"><img src=".github/readme/banner.svg" alt="Flow Workspace MCP — 连接 Flow 与本地制作流程" width="100%"></p>
+
+<h1 align="center">Flow Workspace MCP · 连接 Flow 与本地制作流程</h1>
+
+<p align="center">复用 Google Flow 登录会话，跟踪生成任务，并交付身份可核对的本地素材。</p>
+
+<p align="center"><img src="https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-60a5fa?style=flat-square&amp;labelColor=172033" alt="docs: 中文"> <img src="https://img.shields.io/badge/maintainer-QIANLING-0831-60a5fa?style=flat-square&amp;labelColor=172033" alt="maintainer: QIANLING-0831"> </p>
+
+<p align="center"><a href="#解决什么问题">解决什么问题</a> &nbsp; · &nbsp; <a href="#有什么优势">有什么优势</a> &nbsp; · &nbsp; <a href="#如何工作">如何工作</a> &nbsp; · &nbsp; <a href="#快速开始">快速开始</a></p>
+
+---
+
+## 项目概览
+
+| 方向 | 内容 |
+| --- | --- |
+| **工作区连接** | 隔离账号会话与实际能力读取 |
+| **任务跟踪** | 同一编号查询，保存分镜组进度 |
+| **素材交接** | 精确匹配原视频并记录下载信息 |
 
 **将 Google Flow 接入本地视频制作：持久化任务、复用登录、原视频接口下载。**
 
