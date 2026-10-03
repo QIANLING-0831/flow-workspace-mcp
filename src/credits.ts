@@ -14,11 +14,17 @@ export function parseCreditBalance(text: string): number | null {
   return values.length && values.every((value) => Number.isSafeInteger(value) && value === values[0]) ? values[0]! : null;
 }
 
-export function confirmedCreditRejection(text: string, prompt: string): boolean {
+export function currentPromptReply(text: string, prompt: string): string | null {
   const position = text.lastIndexOf(prompt);
-  if (position < 0) return false;
-  const response = text.slice(position + prompt.length);
+  return position < 0 ? null : text.slice(position + prompt.length);
+}
+
+export function confirmedCreditRejection(text: string, prompt: string): boolean {
+  const response = currentPromptReply(text, prompt);
+  if (response === null) return false;
+  // Mixed credit/daily-limit responses do not distinguish balance exhaustion
+  // from access/rate restrictions. Never rotate accounts for those restrictions.
+  if (/credit(?:s)?\s+or\s+(?:daily|rate)\s+limit|daily\s+limit|rate\s+limit|too many requests|captcha|验证码|限流|每日上限|policy|政策|封禁/i.test(response)) return false;
   return /\bFailed\b|失败/.test(response)
-    && /reached your credit limit|not enough (?:AI )?credits|insufficient (?:AI )?credits|(?:点数|积分|额度)不足/i.test(response)
-    && /(?:won't be|will not be|have not been|not been)\s+charged|不会.*(?:扣|收取)|未.*扣/i.test(response);
+    && /reached your credit limit|not enough (?:AI )?credits|insufficient (?:AI )?credits|(?:点数|积分|额度)不足/i.test(response);
 }

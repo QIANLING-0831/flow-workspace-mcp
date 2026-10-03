@@ -5,7 +5,7 @@ import { preferredPersistentApprovalIndex } from "./approval.js";
 import { BrowserManager } from "./browser-manager.js";
 import { cleanCapabilityLabel, normalizeCapabilityId, parseDurationSeconds, parseOutputCount, type CapabilityOption } from "./capabilities.js";
 import { CookieBridge } from "./cookie-bridge.js";
-import { confirmedCreditRejection, parseCreditBalance } from "./credits.js";
+import { confirmedCreditRejection, currentPromptReply, parseCreditBalance } from "./credits.js";
 import { FlowError } from "./errors.js";
 import { mediaExtension, probeMedia } from "./media.js";
 import { readOriginalVideo, trackedVideoId } from "./read-api.js";
@@ -1264,10 +1264,11 @@ export class FlowAdapter {
     while (Date.now() < deadline) {
       const body = (await page.locator("body").innerText().catch(() => "")).slice(-10_000);
       if (job && confirmedCreditRejection(body, job.prompt)) {
-        await this.store.updateJob(job, "failed", { creditFailureConfirmed: true, error: "Flow explicitly rejected this request for credit exhaustion and confirmed it was not charged." });
+        await this.store.updateJob(job, "failed", { creditFailureConfirmed: true, error: "Flow explicitly rejected this request for credit exhaustion." });
         return null;
       }
-      if (FAILURE_TEXT.test(body)) {
+      const currentFailureText = job ? currentPromptReply(body, job.prompt) ?? "" : body;
+      if (FAILURE_TEXT.test(currentFailureText)) {
         throw new FlowError("generation_failed", "Flow reported that the generation failed or requires attention.");
       }
       const media = this.mediaLocator(page, type);
